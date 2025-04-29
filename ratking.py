@@ -420,31 +420,46 @@ class GitGraph:
 
         return linear_parent
 
-    
+    @classmethod
+    def common_ancestor(self, left, right):
+        before, after = None, None
+        for x, y in zip(left.linear, right.linear):
+            if x != y:
+                after = y
+                break
+
+            if left.children[x] != right.children[y]:
+                after = y
+                break
+
+            before = x
+            # XXX: skip consolidating, as more branch history
+        return before, after
+
 
     @classmethod
-    def interweave(cls, graphs):
+    def interweave(cls, graphs, merge_points={}, named_heads=None):
         all_commits = {}
         all_tails = set()
         all_heads = set()
         all_children = {}
         all_parents = {}
-        history = list()
+        all_linear = list()
         graph_heads = set()
         graph_tails = set()
-        named_heads = {}
+        all_named_heads = {}
 
-        fragments = set()
+        all_fragments = set()
 
         for name, graph in graphs.items():
             for idx, c in graph.commits.items():
                 if idx in graph.fragments: # skip fake commit
                     if idx not in all_commits:
-                        fragments.add(idx)
+                        all_fragments.add(idx)
                     continue
 
-                if idx in fragments:
-                    fragments.remove(idx)
+                if idx in all_fragments:
+                    all_fragments.remove(idx)
 
                 if idx not in all_commits:
                     all_commits[idx] = c
@@ -465,7 +480,7 @@ class GitGraph:
                     if idx in all_heads:
                         all_heads.remove(idx)
 
-            history.append(list(graph.linear))
+            all_linear.append(list(graph.linear))
 
             graph_heads.add(graph.head)
             graph_tails.add(graph.tail)
@@ -474,9 +489,9 @@ class GitGraph:
             all_heads.update(t for t in graph.heads if not all_children[t])
 
             for k, v in graph.named_heads.items():
-                named_heads[f"{name}/{k}"] = v
+                all_named_heads[f"{name}/{k}"] = v
     
-        old_history = [list(h) for h in history]
+        history = [list(h) for h in all_linear]
         new_history = []
 
         while history:
@@ -499,7 +514,7 @@ class GitGraph:
         seen = set()
         new_history2 = []
 
-        for h in old_history:
+        for h in all_linear:
             new_history2.extend(x for x in h if x not in seen)
             seen.update(h)
 
@@ -508,9 +523,9 @@ class GitGraph:
         if new_history != new_history2:
             raise Exception("welp")
 
-        history = new_history2
+        linear = new_history2
     
-        prev = history[0]
+        prev = linear[0]
 
         if prev not in all_tails:
             raise Exception("bad")
@@ -519,7 +534,7 @@ class GitGraph:
         if all_parents[prev]:
             raise Exception("bad")
 
-        for idx in history[1:]:
+        for idx in linear[1:]:
             old_parents = all_commits[idx].parents
             if idx in all_tails:
                 all_tails.remove(idx)
@@ -535,9 +550,9 @@ class GitGraph:
 
             prev = idx
 
-        prev = history[0]
-        date = all_commits[history[0]].max_date
-        for idx in history[1:]:
+        prev = linear[0]
+        date = all_commits[linear[0]].max_date
+        for idx in linear[1:]:
             old_parents = all_commits[idx].parents
             if prev not in old_parents:
                 raise Exception('bad merge', prev, idx)
@@ -549,9 +564,9 @@ class GitGraph:
             prev = idx
             date = new_date
 
-        linear_parent = cls.make_linear_parent(history, all_tails, all_children)
+        linear_parent = cls.make_linear_parent(linear, all_tails, all_children)
 
-        linear_depth = [linear_parent[x] for x in history]
+        linear_depth = [linear_parent[x] for x in linear]
         if linear_depth != sorted(linear_depth):
             raise Exception("bad linear depth")
 
@@ -559,14 +574,14 @@ class GitGraph:
             missing = set(all_commits) - set(linear_parent)
             print(missing)
             for m in missing:
-                if m in history:
+                if m in linear:
                     print(m, "found in linear history")
                 else:
                     print(m, "not found in linear history")
             raise Exception(f'bad {len(all_commits)} {len(linear_parent)}')
 
-        head = history[-1]
-        tail = history[0]
+        head = linear[-1]
+        tail = linear[0]
 
         if head not in graph_heads:
             raise Exception("bad")
@@ -595,18 +610,23 @@ class GitGraph:
 
         all_heads = {l for l in all_heads if not all_children[l]}
 
+        for name, merge_point in named_heads.items():
+            pass
+        
+        # merge_points as named_heads
+
         return cls(
             commits = all_commits,
             tails = all_tails,
             heads = all_heads,
             children = all_children,
             parents = all_parents,
+            named_heads = all_named_heads,
             head = head,
             tail = tail,
-            named_heads = named_heads,
-            linear = history,
+            linear = linear,
             linear_parent = linear_parent,
-            fragments = fragments,
+            fragments = all_fragments,
         )
 
 
@@ -1067,11 +1087,10 @@ print()
 #
 # xxx - GitGraph
 #
-#       graph.common_ancestors(other)
 #       graph.walk_forwards graph walk_backwards
 #
 #       graph.interweave(..., merge_point=)
-#            where merge_points {name: set(points)}
+#           where merge_points {name: set(points)}
 #           and it sets a named head
 #
 #       graph.properties = set([monotonic, monotonic-author, monotonic-committer]) 
