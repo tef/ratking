@@ -621,18 +621,6 @@ class GitRepo:
 
     def __init__(self, repo_dir):
         self.git = pygit2.init_repository(repo_dir, bare=True)
-        self.grafted = {}
-        self.grafted_tree = {}
-
-    def load_grafts(self, path):
-        if os.path.exists(path):
-            with open(path, "r+") as fh:
-                self.grafted = json.load(fh)
-
-    def save_grafts(self, path):
-        with open(path, "w+") as fh:
-            json.dump(self.grafted, fh, sort_keys=True, indent=2)
-
     def get_branch_head(self, name):
         if name in self.git.branches:
             return str(self.git.branches[name].target)
@@ -923,6 +911,26 @@ class GitRepo:
             prev = self.write_commit(c1)
         return prev
 
+    def Writer(self):
+        return GitWriter(self)
+
+
+class GitWriter:
+    def __init__(self, repo):
+        self.repo = repo
+        self.grafted = {}
+        self.grafted_tree = {}
+
+    def load_grafts(self, path):
+        if os.path.exists(path):
+            with open(path, "r+") as fh:
+                self.grafted = json.load(fh)
+
+    def save_grafts(self, path):
+        with open(path, "w+") as fh:
+            json.dump(self.grafted, fh, sort_keys=True, indent=2)
+
+
     def graft(self, init_graph, init_tree, graph, graph_prefix, bad_files, fix_commit):
         init = init_graph.head
         count = dict(graph.parent_count)
@@ -938,21 +946,21 @@ class GitRepo:
                 c1 = graph.commits[idx]
                 prefix = graph_prefix[idx] if graph_prefix is not None else None
 
-                ctree = self.get_tree(c1.tree)
-                tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
+                ctree = self.repo.get_tree(c1.tree)
+                tree, ctree = self.repo.clean_tree(c1.tree, ctree, bad_files)
                 c1.parents = [init]
                 if prefix:
-                    c1.tree, ctree = self.merge_tree(init_tree, tree, prefix)
+                    c1.tree, ctree = self.repo.merge_tree(init_tree, tree, prefix)
                 if fix_commit is not None:
                     c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
-                c2 = self.write_commit(c1)
+                c2 = self.repo.write_commit(c1)
 
                 self.grafted[idx] = (c2, c1.tree)
                 self.grafted_tree[idx] = ctree
 
             else:
                 c2 = self.grafted[idx][0]
-                # c1 = self.get_commit[c2]
+                # c1 = self.repo.get_commit[c2]
 
             graph_count += 1
 
@@ -972,8 +980,8 @@ class GitRepo:
             if idx not in self.grafted:
                 prefix = graph_prefix[idx] if graph_prefix is not None else None
                 c1 = graph.commits[idx]
-                ctree = self.get_tree(c1.tree)
-                c1.tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
+                ctree = self.repo.get_tree(c1.tree)
+                c1.tree, ctree = self.repo.clean_tree(c1.tree, ctree, bad_files)
 
                 c1.parents = [self.grafted[p][0] for p in graph.parents[idx]]
 
@@ -982,20 +990,20 @@ class GitRepo:
 
                     if max_parent not in self.grafted_tree:
                         c,t = self.grafted[max_parent]
-                        self.grafted_tree[max_parent] = self.get_tree(t)
+                        self.grafted_tree[max_parent] = self.repo.get_tree(t)
 
                     max_tree = self.grafted_tree[max_parent]
-                    c1.tree, ctree = self.merge_tree(max_tree, c1.tree, prefix)
+                    c1.tree, ctree = self.repo.merge_tree(max_tree, c1.tree, prefix)
 
                 if fix_commit is not None:
                     c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
 
-                c2 = self.write_commit(c1)
+                c2 = self.repo.write_commit(c1)
                 self.grafted[idx] = (c2, c1.tree)
                 self.grafted_tree[idx] = ctree
             else:
                 c2 = self.grafted[idx][0]
-                #c1 = self.get_commit[c2]
+                #c1 = self.repo.get_commit[c2]
 
             graph_count += 1
 
@@ -1020,7 +1028,7 @@ class GitRepo:
             if x not in self.grafted:
                 raise Exception("missing")
     
-        fragment = self.get_graph(self.grafted[graph.head][0]) #, known=init_graph.commits)
+        fragment = self.repo.get_graph(self.grafted[graph.head][0]) #, known=init_graph.commits)
         fragment.named_heads = dict(init_graph.named_heads)
         fragment.named_heads.update({k: self.grafted[v][0] for k,v in graph.named_heads.items()})
         fragment.fragments = set([init])
@@ -1029,6 +1037,31 @@ class GitRepo:
 
 print()
 
+# xxx - GitGraph
+#       g.trees[x] = GitTree()
+#
+#     - graph.common_ancestors(other)
+#
+# xxx - GitRepo.Writer()
+#       repo.Writer(graph)
+#       repo.init_commit() returns graph
+#       
+#       graph.add_graph(new_head)
+#       graph.new_head()
+#
+#       writer.new_head()
+#
+# xxx - grafting on a fragment, may want to provide a GitTree for it, 
+#       i.e graft_trees = {init:empty{}}
+#
+# xxx - top level object for script state (these origins, these upstreams, etc)
+# xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
+#
+
+
+
+# eh
+# xxx - preserving old commit names in headers / changes
 #
 # xxx - create tree cleaned upstream branches
 #       graft upstreams to init, alone
@@ -1043,10 +1076,3 @@ print()
 #       and check that the tree matches as expected, and for ones with linear depth of 0
 #       we know 
 #
-# xxx - graph.add_graph(x, new_head=), graph.new_head(head) 
-#
-# xxx - top level object for script state (these origins, these upstreams, etc)
-# xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
-#
-# xxx - grafting on a fragment, may want to provide a GitTree for it, 
-#       i.e graft_trees = {init:empty{}}
