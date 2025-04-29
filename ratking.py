@@ -820,97 +820,6 @@ class GitRepo:
         )
 
 
-    def clean_tree(self, addr, old_tree, bad_files):
-        entries = []
-        dropped = False
-        for i in old_tree.entries:
-            name = i[1]
-            bad = bad_files.get(name, None)
-            if bad is None:
-                entries.append(i)
-            elif callable(bad):
-                out = bad(i[0],i[1],i[2])
-                if out:
-                    entries.append(out)
-                    if out != i:
-                        dropped=True
-                else:
-                    dropped=True
-            elif isinstance(bad, dict):
-                sub_tree = self.get_tree(i[2])
-                new_addr, tree_obj = self.clean_tree(i[2], sub_tree, bad)
-                if new_addr != i[2]:
-                    entries.append((i[0], i[1], new_addr))
-                    dropped = True
-            else:
-                dropped = True
-                pass # delete it, if it's an empty hash
-        if not dropped:
-            return addr, old_tree
-        new_tree = GitTree(entries)
-        return self.write_tree(new_tree), new_tree
-
-    def prefix_tree(self, tree, prefix):
-        entries = []
-        for p in prefix:
-            e = (GIT_DIR_MODE, p, tree)
-            entries.append(e)
-        t = GitTree(entries)
-        return self.write_tree(t), t
-
-    def merge_tree(self, prev_tree, tree, prefix):
-        entries = [e for e in prev_tree.entries if e[1] not in prefix]
-        for p in prefix:
-            e = (GIT_DIR_MODE, p, tree)
-            entries.append(e)
-        t = GitTree(entries)
-        return self.write_tree(t), t
-
-    def shallow_merge(self, init, graphs, bad_files, fix_commit):
-        heads = []
-
-        for name, graph in graphs.items():
-            head = graph.head
-            c = graph.commits[head]
-            prefix = [name]
-            heads.append((head, c, prefix))
-
-        heads.sort(key=lambda x:x[1].max_date)
-        entries = []
-        
-        prev = init
-        for head, commit, prefix in heads:
-            old_tree = self.get_tree(commit.tree)
-            tree_idx, tree = self.clean_tree(commit.tree, old_tree, bad_files)
-
-            entries = [e for e in entries if e[1] not in prefix]
-
-            for p in prefix:
-                e = (GIT_DIR_MODE, p, tree_idx)
-                entries.append(e)
-            
-            t = GitTree(entries)
-            tidx = self.write_tree(t)
-    
-            if fix_commit is not None:
-                author, committer, message = fix_commit(commit,  ", ".join(sorted(prefix)))
-            else:
-                author, committer, message = commit.author, commit.committer, commit.message
-
-            c1 = GitCommit(
-                    tree=tidx,
-                    parents=[prev],
-                    author=author,
-                    committer=committer,
-                    message = message,
-                    max_date = commit.max_date,
-                    author_date = commit.author_date,
-                    committer_date = commit.committer_date,
-            )
-
-            prev = self.write_commit(c1)
-        return prev
-
     def Writer(self):
         return GitWriter(self)
 
@@ -930,6 +839,97 @@ class GitWriter:
         with open(path, "w+") as fh:
             json.dump(self.grafted, fh, sort_keys=True, indent=2)
 
+    def clean_tree(self, addr, old_tree, bad_files):
+        entries = []
+        dropped = False
+        for i in old_tree.entries:
+            name = i[1]
+            bad = bad_files.get(name, None)
+            if bad is None:
+                entries.append(i)
+            elif callable(bad):
+                out = bad(i[0],i[1],i[2])
+                if out:
+                    entries.append(out)
+                    if out != i:
+                        dropped=True
+                else:
+                    dropped=True
+            elif isinstance(bad, dict):
+                sub_tree = self.repo.get_tree(i[2])
+                new_addr, tree_obj = self.clean_tree(i[2], sub_tree, bad)
+                if new_addr != i[2]:
+                    entries.append((i[0], i[1], new_addr))
+                    dropped = True
+            else:
+                dropped = True
+                pass # delete it, if it's an empty hash
+        if not dropped:
+            return addr, old_tree
+        new_tree = GitTree(entries)
+        return self.repo.write_tree(new_tree), new_tree
+
+    def prefix_tree(self, tree, prefix):
+        entries = []
+        for p in prefix:
+            e = (GIT_DIR_MODE, p, tree)
+            entries.append(e)
+        t = GitTree(entries)
+        return self.repo.write_tree(t), t
+
+    def merge_tree(self, prev_tree, tree, prefix):
+        entries = [e for e in prev_tree.entries if e[1] not in prefix]
+        for p in prefix:
+            e = (GIT_DIR_MODE, p, tree)
+            entries.append(e)
+        t = GitTree(entries)
+        return self.repo.write_tree(t), t
+
+    def shallow_merge(self, init, graphs, bad_files, fix_commit):
+        heads = []
+
+        for name, graph in graphs.items():
+            head = graph.head
+            c = graph.commits[head]
+            prefix = [name]
+            heads.append((head, c, prefix))
+
+        heads.sort(key=lambda x:x[1].max_date)
+        entries = []
+        
+        prev = init
+        for head, commit, prefix in heads:
+            old_tree = self.repo.get_tree(commit.tree)
+            tree_idx, tree = self.clean_tree(commit.tree, old_tree, bad_files)
+
+            entries = [e for e in entries if e[1] not in prefix]
+
+            for p in prefix:
+                e = (GIT_DIR_MODE, p, tree_idx)
+                entries.append(e)
+            
+            t = GitTree(entries)
+            tidx = self.repo.write_tree(t)
+    
+            if fix_commit is not None:
+                author, committer, message = fix_commit(commit,  ", ".join(sorted(prefix)))
+            else:
+                author, committer, message = commit.author, commit.committer, commit.message
+
+            c1 = GitCommit(
+                    tree=tidx,
+                    parents=[prev],
+                    author=author,
+                    committer=committer,
+                    message = message,
+                    max_date = commit.max_date,
+                    author_date = commit.author_date,
+                    committer_date = commit.committer_date,
+            )
+
+            prev = self.repo.write_commit(c1)
+        return prev
+
 
     def graft(self, init_graph, init_tree, graph, graph_prefix, bad_files, fix_commit):
         init = init_graph.head
@@ -947,10 +947,10 @@ class GitWriter:
                 prefix = graph_prefix[idx] if graph_prefix is not None else None
 
                 ctree = self.repo.get_tree(c1.tree)
-                tree, ctree = self.repo.clean_tree(c1.tree, ctree, bad_files)
+                tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
                 c1.parents = [init]
                 if prefix:
-                    c1.tree, ctree = self.repo.merge_tree(init_tree, tree, prefix)
+                    c1.tree, ctree = self.merge_tree(init_tree, tree, prefix)
                 if fix_commit is not None:
                     c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
                 c2 = self.repo.write_commit(c1)
@@ -981,7 +981,7 @@ class GitWriter:
                 prefix = graph_prefix[idx] if graph_prefix is not None else None
                 c1 = graph.commits[idx]
                 ctree = self.repo.get_tree(c1.tree)
-                c1.tree, ctree = self.repo.clean_tree(c1.tree, ctree, bad_files)
+                c1.tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
 
                 c1.parents = [self.grafted[p][0] for p in graph.parents[idx]]
 
@@ -993,7 +993,7 @@ class GitWriter:
                         self.grafted_tree[max_parent] = self.repo.get_tree(t)
 
                     max_tree = self.grafted_tree[max_parent]
-                    c1.tree, ctree = self.repo.merge_tree(max_tree, c1.tree, prefix)
+                    c1.tree, ctree = self.merge_tree(max_tree, c1.tree, prefix)
 
                 if fix_commit is not None:
                     c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
@@ -1037,32 +1037,45 @@ class GitWriter:
 
 print()
 
+# xxx - GitRepo
+#       repo.get_fragment(head) returns one item graph
+#       repo.init_commit() returns graph
+#       
 # xxx - GitGraph
 #       g.trees[x] = GitTree()
 #
-#     - graph.common_ancestors(other)
-#
-# xxx - GitRepo.Writer()
-#       repo.Writer(graph)
-#       repo.init_commit() returns graph
-#       
-#       graph.add_graph(new_head)
+#       graph.common_ancestors(other)
+#       graph.add_fragment(... new_head=...)
 #       graph.new_head()
+#
+#       graph.interweave(..., find_merge_point=)
+#
+#       graph.properties = set([monotonic, monotonic-author, monotonic-committer]) 
+#
+# xxx - GitWriter()
+#       repo.Writer(graph, bad_files=.., fix_message=...)
+#
+#       writer.graft(..., replace_trees = {init.tree:empty{}})
 #
 #       writer.new_head()
 #
-# xxx - grafting on a fragment, may want to provide a GitTree for it, 
-#       i.e graft_trees = {init:empty{}}
+# xxx - GitGraph / GitHistory
 #
-# xxx - top level object for script state (these origins, these upstreams, etc)
-# xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
+#       something to store head, linear, linear_parent
+#
+#
+# xxx - Processor()
+#       fold mkrepo.py up into more general class
 #
 
 
 
 # eh
+# xxx - general idea of finer grained merges, file based or subdirectory based
 # xxx - preserving old commit names in headers / changes
 #
+# xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
+#   
 # xxx - create tree cleaned upstream branches
 #       graft upstreams to init, alone
 #       then extract old trees from combined graph
