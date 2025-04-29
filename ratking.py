@@ -62,7 +62,6 @@ class GitGraph:
     named_heads: set
     parents: dict
     children: dict
-    parent_count: dict
     fragments: set 
 
     linear: dict
@@ -75,7 +74,6 @@ class GitGraph:
             heads = set(self.heads),
             children = {k:set(v) for k,v in self.children.items()},
             parents = {k:list(v) for k,v in self.parents.items()},
-            parent_count = dict(self.parent_count),
             head = str(self.head),
             tail = str(self.tail),
             named_heads = dict(self.named_heads),
@@ -90,7 +88,6 @@ class GitGraph:
                 c = other.commits[idx]
                 self.commits[idx] = c
                 self.parents[idx] = other.parents[idx]
-                self.parent_count[idx] = other.parent_count[idx]
                 for p in self.parents[idx]:
                     if p in self.heads:
                         self.heads.remove(p)
@@ -259,11 +256,6 @@ class GitGraph:
             if len(set(graph_parents)) != len(graph_parents):
                 raise Exception("dupe parent")
 
-            count_parents = self.parent_count[c]
-
-            if count_parents != len(graph_parents):
-                raise Exception("bad count")
-            
             if graph_parents:
                 for p in graph_parents:
                     if p not in walked:
@@ -340,17 +332,14 @@ class GitGraph:
 
         # validate walk through counts
 
-        for c in self.commits:
-            if self.parent_count[c] != len(self.parents[c]):
-                raise Exception("miscount")
-
         for f in self.tails:
-            if self.parent_count[f] != 0:
+            if self.parents[f]: 
                 raise Exception("bad")
 
         walked = set(self.tails)
         search = list(self.tails)
-        counts = dict(self.parent_count)
+        parent_counts = {k:len(v) for k,v in self.parents.items()}
+        counts = dict(parent_counts)
         heads = set()
 
         linear_depth = {f: self.linear_parent[f] for f in self.linear}
@@ -380,7 +369,7 @@ class GitGraph:
                 heads.add(i)
 
         if not heads:
-            missing = [x for x in self.commits if x not in walked and counts[x] != self.parent_count[x]]
+            missing = [x for x in self.commits if x not in walked and counts[x] != parent_count[x]]
             print("never walked", len(self.commits)-len(walked))
             print("almost walked", len(missing))
             for m in missing:
@@ -440,7 +429,6 @@ class GitGraph:
         all_heads = set()
         all_children = {}
         all_parents = {}
-        parent_count = {}
         history = list()
         graph_heads = set()
         graph_tails = set()
@@ -461,7 +449,6 @@ class GitGraph:
                 if idx not in all_commits:
                     all_commits[idx] = c
                     all_parents[idx] = graph.parents[idx]
-                    parent_count[idx] = graph.parent_count[idx]
 
                 else:
                     o = all_commits[idx]
@@ -543,7 +530,6 @@ class GitGraph:
 
             all_parents[idx] = list(new_parents)
             all_commits[idx].parents = list(new_parents)
-            parent_count[idx] = len(new_parents)
 
             all_children[prev].add(idx)
 
@@ -615,7 +601,6 @@ class GitGraph:
             heads = all_heads,
             children = all_children,
             parents = all_parents,
-            parent_count = parent_count,
             head = head,
             tail = tail,
             named_heads = named_heads,
@@ -740,7 +725,6 @@ class GitRepo:
             tails = set([head]),
             children = {head: set()},
             parents =  {head: set()},
-            parent_count = {head: 0},
             head = head,
             tail = head,
             heads = set([head]),
@@ -825,7 +809,7 @@ class GitRepo:
             if new_date < date:
                 raise Exception("time travel")
 
-        # xxx set property
+        # XXX set property
 
         linear_parent = GitGraph.make_linear_parent(history, tails, children)
 
@@ -837,7 +821,6 @@ class GitRepo:
             tails = tails,
             children = children,
             parents = parents,
-            parent_count = count,
             head = head,
             tail = history[0],
             heads = set([head]),
@@ -967,7 +950,7 @@ class GitWriter:
 
     def graft(self, init_graph, init_tree, graph, graph_prefix, bad_files, fix_commit):
         init = init_graph.head
-        count = dict(graph.parent_count)
+        count = {k:len(v) for k,v in graph.parents.items()}
         to_graft = []
 
         graph_total = len(graph.commits)
@@ -1070,36 +1053,33 @@ class GitWriter:
 
 print()
 
-# xxx - 
-#       tips and tails ?
-#       writer.init_commit()
+# xxx - weave builds up a graph
+#       repo.Writer(graph)
+#       repo.init_commit() returns a graph
 #
-#       get rid of parent count?
-#
-#       dataclass Graft
-
-# xxx - Graph.add_commit
-#       weave calls add_commit
+#       weave calls graph.union(graph) on all
+#       graft calls graft.add(commit) on all
 #       
-# xxx - GitGraph
-#       g.trees[x] = GitTree()
-#
-#       graph.common_ancestors(other)
 #       graph.add_fragment(... new_head=...)
 #       graph.new_head()
+#       graph.new_tail(tail, head)
 #
-#       graph.interweave(..., find_merge_point=)
-#            or named_points {name: set(points)}
+#
+# xxx - GitGraph
+#
+#       graph.common_ancestors(other)
+#       graph.walk_forwards graph walk_backwards
+#
+#       graph.interweave(..., merge_point=)
+#            where merge_points {name: set(points)}
+#           and it sets a named head
 #
 #       graph.properties = set([monotonic, monotonic-author, monotonic-committer]) 
 #       
-#       graph union
-#
-#       graph.walk
 #
 # xxx - GitWriter()
 #       repo.Writer(graph, bad_files=.., fix_message=...)
-#       writer.new_head()
+#       writer.new_head(...)
 #
 #       writer.graft(..., replace_trees = {init.tree:empty{}})
 #
@@ -1107,8 +1087,7 @@ print()
 #
 # xxx - GitGraph / GitHistory
 #
-#       something to store linear, linear_parent
-#
+#       something to store linear ? / linear parent is method?
 #
 # xxx - Processor()
 #       fold mkrepo.py up into more general class
@@ -1120,6 +1099,11 @@ print()
 
 # eh
 # xxx - general idea of finer grained merges, file based or subdirectory based
+#
+#       non linear parents? i.e i tag each tail with which repo it comes from
+#       and inherit that, i.e n linear parents across all graphs
+#       and i can combine "this subdirectory from this root"
+
 # xxx - preserving old commit names in headers / changes
 #
 # xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
