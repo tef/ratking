@@ -1,11 +1,27 @@
 #!env/bin/python3
 
+import functools
+import glob
 import json
 import os.path
+import re
 import subprocess
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from glob import translate as glob_to_regex
+
+@functools.cache
+def compile_pattern(pattern):
+    regex = glob.translate(pattern, recursive=True)
+    return re.compile(regex)
+
+def glob_match(pattern, string):
+    if pattern is None:
+        return None
+    rx = compile_pattern(pattern)
+    return rx.match(string) is not None
+
 
 import pygit2
 
@@ -83,7 +99,7 @@ class GitGraph:
             fragments = set(self.fragments),
         )
 
-    def add_graph_fragment(self, other, *, name, new_head=None):
+    def add_graph_fragment(self, other):
         for idx in other.commits:
             if idx not in self.commits:
                 c = other.commits[idx]
@@ -111,14 +127,6 @@ class GitGraph:
         for l in other.heads:
             if not self.children[l]:
                 self.heads.add(l)
-
-        self.named_heads[name] = other.head
-
-        if new_head:
-            # reset the history
-            # start should include all new linear history
-            # not just graft points
-            raise Exception("missing")
 
         start = [(self.linear_parent.get(x), x) for x in other.tails]
         start.sort(reverse=True, key=lambda x: x[0])
@@ -648,9 +656,9 @@ class GitGraph:
 
 
 class GitRepo:
-
     def __init__(self, repo_dir):
         self.git = pygit2.init_repository(repo_dir, bare=True)
+
     def get_branch_head(self, name):
         if name in self.git.branches:
             return str(self.git.branches[name].target)
@@ -886,9 +894,50 @@ class GitRepo:
             fragments = set(f for f in tails if f in known),
         )
 
+    def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
+        branch_head = self.get_branch_head(branch_name)
 
-    def Writer(self):
-        return GitWriter(self)
+        branch_graph = self.get_graph(branch_head, replace_parents)
+        branch_graph.validate()
+
+        branch_graph.named_heads[branch_name] = branch_head
+
+        return GitBranch(self, head=branch_head, graph=branch_graph, named_heads=named_heads)
+
+    def get_remote_branch(self, rname, branch_name, include="*", exclude=None, replace_parents=None):
+
+        branch_head = self.get_remote_branch_head(rname, branch_name)
+        branch_graph = self.get_graph(branch_head, replace_parents)
+        branch_graph.validate()
+
+        named_heads = {branch_name: branch_head}
+
+        if include:
+            all_remote_branches = self.all_remote_branches()
+            remote_branches = all_remote_branches.get(rname,{})
+
+            for name, idx in remote_branches.items():
+                if name == branch_name:
+                    continue
+                if not glob_match(include, name) or glob_match(exclude, name):
+                    continue
+
+                graph = self.get_graph(idx, replace_parents, known=branch_graph.commits)
+                graph.validate()
+
+                if all(f in branch_graph.commits for f in graph.tails):
+                    branch_graph.add_graph_fragment(graph)
+                    named_heads[name] = graph.head
+                    branch_graph.validate()
+                else:
+                    pass # orphan branch or new tail commit
+
+
+        branch_graph.named_heads.update(named_heads)
+        return GitBranch(self, head=branch_head, graph=branch_graph, named_heads=named_heads)
+
+    def Branch(self):
+        return GitBranch(self)
 
 
 @dataclass
@@ -899,10 +948,13 @@ class Graft:
     tree: object
 
 
-class GitWriter:
-    def __init__(self, repo):
+class GitBranch:
+    def __init__(self, repo, head=None, graph=None, named_heads=None):
         self.repo = repo
         self.grafts = {}
+        self.head = None
+        self.graph = graph
+        self.named_heads = {}
 
     def grafted(self, idx):
         return self.grafts[idx].idx
@@ -1107,9 +1159,18 @@ class GitWriter:
         # init_graph.clone().add_graph_fragment(fragment, name=None, new_head=fragment.head)
         return fragment
 
-print()
 
-# xxx - weave builds up a graph
+#       alt: GitBranch has a head, a tail, a linear history and a linear_parent
+#            and contains a Graph
+#       
+#       writer takes an init argument and default arguments for graft()
+#       shallow merge should be a Graph.shallow_merge(graphs) and then graft() 
+#       get rid of linear parent inside graph???
+#       
+# xxx   interweave returns a prefix like map of idx to set
+#       or a branch contains prefixes 
+#
+## xxx - weave builds up a graph
 #       repo.Writer(graph)
 #       repo.init_commit() returns a graph
 #
@@ -1125,7 +1186,7 @@ print()
 #       graph.walk_forwards graph walk_backwards
 #       graph.properties = set([monotonic, monotonic-author, monotonic-committer]) 
 #       
-# xxx - GitWriter()
+# xxx - GitBranch()
 #       repo.Writer(graph, bad_files=.., fix_message=...)
 #       writer.new_head(...)
 #
@@ -1136,7 +1197,6 @@ print()
 #       something to store linear ? / linear parent is method?
 #
 # xxx - GitRepo
-#       init_commit returns graph
 #       get_branch(remote, name)
 #       get_branches("remote name", head="default_branch", include_orphans=False) 
 
