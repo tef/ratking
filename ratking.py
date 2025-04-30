@@ -612,6 +612,7 @@ class GitGraph:
             for c in graph.commits:
                 if graph.linear_parent[c] == 0:
                     if linear_parent[c] != 0:
+                        # XXX - we exclude extra tails and shouldn't fold them in
                         raise Exception("bad")
                 lp = graph.linear_parent[c]
                 lp_idx = graph.linear[lp-1]
@@ -939,6 +940,26 @@ class GitRepo:
     def Branch(self):
         return GitBranch(self)
 
+    def interweave(self, branches, named_heads=None):
+
+        graphs = {k:v.graph for k,v in branches.items()}
+
+        merged_graph = GitGraph.interweave(graphs, named_heads=named_heads)
+        merged_graph.validate() # merged
+
+        print(merged_graph.named_heads)
+
+        prefix = {}
+        for name, branch in graphs.items():
+            for c in branch.commits:
+                if c not in prefix:
+                    prefix[c] = set()
+                prefix[c].add(name)
+
+        branch = GitBranch(self, head=merged_graph.head, graph=merged_graph, named_heads=merged_graph.named_heads)
+        return branch, prefix
+
+
 
 @dataclass
 class Graft:
@@ -951,10 +972,10 @@ class Graft:
 class GitBranch:
     def __init__(self, repo, head=None, graph=None, named_heads=None):
         self.repo = repo
-        self.grafts = {}
         self.head = None
         self.graph = graph
-        self.named_heads = {}
+        self.named_heads = named_heads
+        self.grafts = {}
 
     def grafted(self, idx):
         return self.grafts[idx].idx
@@ -1056,10 +1077,12 @@ class GitBranch:
         return prev
 
 
-    def graft(self, init_graph, init_tree, graph, graph_prefix, bad_files, fix_commit):
+    def graft(self, init_graph, init_tree, branch, graph_prefix, bad_files, fix_commit):
         init = init_graph.head
+        graph = branch.graph
         count = {k:len(v) for k,v in graph.parents.items()}
         to_graft = []
+
 
         graph_total = len(graph.commits)
         graph_count = 0
@@ -1159,7 +1182,12 @@ class GitBranch:
         # init_graph.clone().add_graph_fragment(fragment, name=None, new_head=fragment.head)
         return fragment
 
-
+# xxx
+#       named_heads into merge, and then merge_names=["a"] means they don't get prefixed, and combined
+# xxx   interweave returns a prefix like map of idx to set
+#       or a branch contains prefixes 
+#
+# xxx
 #       alt: GitBranch has a head, a tail, a linear history and a linear_parent
 #            and contains a Graph
 #       
@@ -1167,8 +1195,6 @@ class GitBranch:
 #       shallow merge should be a Graph.shallow_merge(graphs) and then graft() 
 #       get rid of linear parent inside graph???
 #       
-# xxx   interweave returns a prefix like map of idx to set
-#       or a branch contains prefixes 
 #
 ## xxx - weave builds up a graph
 #       repo.Writer(graph)
