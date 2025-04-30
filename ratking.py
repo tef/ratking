@@ -15,6 +15,7 @@ GIT_FILE_MODE2 = 0o100_664
 GIT_EXEC_MODE = 0o100_755
 GIT_LINK_MODE = 0o120_000
 GIT_GITLINK_MODE = 0o160_000 # actually a submodule, blegh
+GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904" # Wow, isn't git amazing.
 
 class AuthCallbacks(pygit2.RemoteCallbacks):
     def credentials(self, url, username_from_url, allowed_types):
@@ -438,7 +439,7 @@ class GitGraph:
 
 
     @classmethod
-    def interweave(cls, graphs, merge_points={}, named_heads=None):
+    def interweave(cls, graphs, named_heads=None):
         all_commits = {}
         all_tails = set()
         all_heads = set()
@@ -448,8 +449,10 @@ class GitGraph:
         graph_heads = set()
         graph_tails = set()
         all_named_heads = {}
-
         all_fragments = set()
+
+        if named_heads is None:
+            named_heads = {}
 
         for name, graph in graphs.items():
             for idx, c in graph.commits.items():
@@ -610,10 +613,24 @@ class GitGraph:
 
         all_heads = {l for l in all_heads if not all_children[l]}
 
-        for name, merge_point in named_heads.items():
-            pass
-        
-        # merge_points as named_heads
+        for point_name, merge_points in named_heads.items():
+                
+            all_merge_points =  [(idx, name, graphs[name].linear_parent[idx], linear_parent[idx]) for name, idx in merge_points.items()]
+            all_merge_points.sort(key=lambda x:x[3])
+
+            merge_point = all_merge_points[-1][0]
+            merge_point_time = all_merge_points[-1][-1]
+
+            for idx, name, old_lp, new_lp in all_merge_points:
+                if old_lp == len(graphs[name].linear):
+                    pass # last commit, no worries
+                else:
+                    next_c = graphs[name].linear[old_lp]
+                    next_lp = linear_parent[next_c]
+                    if next_lp <= merge_point_time:
+                        raise Exception("can't make merge point")
+
+            all_named_heads[point_name] = merge_point
 
         return cls(
             commits = all_commits,
@@ -631,7 +648,6 @@ class GitGraph:
 
 
 class GitRepo:
-    EMPTY_GIT_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904" # Wow, isn't git amazing.
 
     def __init__(self, repo_dir):
         self.git = pygit2.init_repository(repo_dir, bare=True)
@@ -725,7 +741,7 @@ class GitRepo:
         signature = pygit2.Signature(name, email, int(timestamp.timestamp()), 0, "utf-8")
         ts = timestamp.astimezone(timezone.utc),
         c = GitCommit(
-                tree = self.EMPTY_GIT_TREE,
+                tree = GIT_EMPTY_TREE,
                 parents=[],
                 author=signature,
                 committer=signature,
@@ -753,6 +769,26 @@ class GitRepo:
             linear_parent = {head:1},
             fragments = set([head]),
         )
+
+    def get_names(self, head):
+        names = {}
+        graph = self.get_graph(head)
+
+        def add_name(i,n):
+            if n not in names:
+                names[n] = set()
+            names[n].add(i)
+
+        for i, c in graph.commits.items():
+            add_name(i, str(c.author))
+            add_name(i, str(c.committer))
+
+            for line in c.message.splitlines():
+                if "Co-authored-by: " in line:
+                    _, name = line.rsplit("Co-authored-by: ", 1)
+                    add_name(i, name.strip())
+        return names
+
 
     def get_graph(self, head, replace_parents=None, known=None):
         if replace_parents is None:
@@ -1086,57 +1122,40 @@ print()
 #
 #
 # xxx - GitGraph
-#
 #       graph.walk_forwards graph walk_backwards
-#
-#       graph.interweave(..., merge_point=)
-#           where merge_points {name: set(points)}
-#           and it sets a named head
-#
 #       graph.properties = set([monotonic, monotonic-author, monotonic-committer]) 
 #       
-#
 # xxx - GitWriter()
 #       repo.Writer(graph, bad_files=.., fix_message=...)
 #       writer.new_head(...)
 #
 #       writer.graft(..., replace_trees = {init.tree:empty{}})
 #
-#       writer.graft builds up a graph and returns it
-#
 # xxx - GitGraph / GitHistory
 #
 #       something to store linear ? / linear parent is method?
 #
+# xxx - GitRepo
+#       init_commit returns graph
+#       get_branch(remote, name)
+#       get_branches("remote name", head="default_branch", include_orphans=False) 
+
+
 # xxx - Processor()
 #       fold mkrepo.py up into more general class
 #
-# xxx - GitRepo
-#       init_commit returns graph
+# xxx - preserving old commit names in headers / changes
 
-
-
-# eh
 # xxx - general idea of finer grained merges, file based or subdirectory based
 #
 #       non linear parents? i.e i tag each tail with which repo it comes from
 #       and inherit that, i.e n linear parents across all graphs
 #       and i can combine "this subdirectory from this root"
-
-# xxx - preserving old commit names in headers / changes
-#
-# xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
-#   
-# xxx - create tree cleaned upstream branches
-#       graft upstreams to init, alone
-#       then extract old trees from combined graph
-#       and commits should be exactly the same
-#
-# xxx - check after graft, each tree matches what is expected
-#       walk up from roots, and store a dict of the last 'linear' version of a subtree was
 #
 #       i.e. non_linear_depth[x] = {project:n, project:n}
+#       build by walk up from roots, and store a dict of the last 'linear' version of a subtree was
 #             
-#       and check that the tree matches as expected, and for ones with linear depth of 0
-#       we know 
-#
+
+# xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
+
+# xxx - maybe clean branches before merging history
