@@ -676,14 +676,6 @@ class GitRepo:
         self.git = pygit2.init_repository(repo_dir, bare=True)
         self._all_remotes = None
 
-    def get_branch_head(self, name):
-        if name in self.git.branches:
-            return str(self.git.branches[name].target)
-
-    def write_branch_head(self, name, addr):
-        c = self.git.revparse_single(addr)
-        self.git.branches.create(name, c, force=True)
-
     def add_remote(self, rname, url):
         names = list(self.git.remotes.names())
 
@@ -710,14 +702,6 @@ class GitRepo:
             out[prefix][name] = self.get_remote_branch_head(prefix, name)
         self._all_remotes = out
         return out
-
-    def get_remote_branch_head(self, rname, name):
-        return str(self.git.branches.remote[f"{rname}/{name}"].target)
-
-    def get_remote_branch_graph(self, rname, name, replace_parents):
-        head = self.get_remote_branch_head(rname, name)
-        branch = self.get_graph(head, replace_parents)
-        return branch
 
 
     def get_commit(self, addr):
@@ -827,6 +811,17 @@ class GitRepo:
             entries.append(e)
         t = GitTree(entries)
         return self.write_tree(t), t
+
+    def get_branch_head(self, name):
+        if name in self.git.branches:
+            return str(self.git.branches[name].target)
+
+    def write_branch_head(self, name, addr):
+        c = self.git.revparse_single(addr)
+        self.git.branches.create(name, c, force=True)
+
+    def get_remote_branch_head(self, rname, name):
+        return str(self.git.branches.remote[f"{rname}/{name}"].target)
 
     def get_fragment(self, head):
         init = self.get_commit(head)
@@ -992,9 +987,8 @@ class GitRepo:
         branch_graph.named_heads.update(named_heads)
         return GitBranch(name=f"{rname}/{branch_name}", head=branch_head, graph=branch_graph, named_heads=named_heads)
 
-    def get_names(self, head):
+    def get_graph_names(self, graph):
         names = {}
-        graph = self.get_graph(head)
 
         def add_name(i,n):
             if n not in names:
@@ -1219,15 +1213,8 @@ class GitWriter:
 #       branch.new_head()
 #       branch.new_tail(tail, head)
 #
-#       repo.Branch(graph, bad_files=.., fix_message=...)
-#       writer.new_head(...)
 #
 #       writer.graft(..., replace_trees = {init.tree:empty{}})
-#
-#
-# xxx  shallow merge
-#       should be GitBranch.shallow_merge() and then a graft?
-#       
 #
 # xxx - GitGraph
 #       interweave calls graph.union(graph) on all
@@ -1238,10 +1225,6 @@ class GitWriter:
 #       
 
 # maybe:  a branch contains prefixes 
-# xxx - maybe clean branches before merging history
-# maybe: interweave writes a branch always, then we graft it
-# maybe we clean branches, interweave with prefix, and then graft
-# maybe interweave creates a branch, merges the graph, and then calls graft
 
 # xxx - Processor()
 #       fold mkrepo.py up into more general class
