@@ -421,24 +421,12 @@ class GitBranch:
 
         # validate linear_depth through counts
 
-        walked = set(graph.tails)
-        search = list(graph.tails)
-        counts = dict(graph.parent_count)
-
         linear_depth = {f: self.linear_parent[f] for f in self.linear}
         linear_depth.update({f: self.linear_parent[f] for f in graph.tails})
 
-        while search:
-            i = search.pop(0)
-
+        for i in graph.walk_tails():
             if i not in linear_depth:
                 linear_depth[i] = max(linear_depth[p] for p in graph.parents[i])
-
-            for c in graph.children[i]:
-                counts[c] -= 1
-                if counts[c] == 0:
-                    walked.add(c)
-                    search.append(c)
 
         if linear_depth != self.linear_parent:
             print(len(linear_depth), len(self.linear_parent))
@@ -1177,8 +1165,11 @@ class GitWriter:
                 c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
 
                 if prefix:
-                    max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
-                    max_tree = self.grafts[max_parent].tree
+                    if idx in graph.tails:
+                        max_tree = init_tree
+                    else:
+                        max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
+                        max_tree = self.grafts[max_parent].tree
                     c1.tree, ctree = self.merge_tree(max_tree, c1.tree, prefix)
 
                 if fix_commit is not None:
@@ -1221,6 +1212,7 @@ class GitWriter:
         return self.head
 
 #### todo
+#       graft uses graph.walk_tails()
 #       graph.trees, and write_tree handlign nested Tree{Tree...}} 
 #
 #       repo.interweave(branches, bad_files, fix_message) 
