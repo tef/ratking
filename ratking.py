@@ -1114,16 +1114,17 @@ class GitWriter:
             if idx not in self.grafts:
                 if idx in graph.fragments:
                     raise Exception("fragment missing")
-                c1 = graph.commits[idx]
                 prefix = graph_prefix
                 if isinstance(prefix, dict):
                     prefix = prefix[idx]
                 if prefix and not isinstance(prefix, set):
                     raise Exception("bad prefix, must be set or dict of set")
 
+                c1 = graph.commits[idx]
                 ctree = self.repo.get_tree(c1.tree)
                 tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
                 c1.parents = [init]
+
                 if prefix:
                     c1.tree, ctree = self.merge_tree(init_tree, tree, prefix)
                 if fix_commit is not None:
@@ -1147,6 +1148,9 @@ class GitWriter:
                 continue
 
             if idx not in self.grafts:
+                if idx in graph.fragments:
+                    raise Exception("fragment missing")
+
                 prefix = graph_prefix
                 if isinstance(prefix, dict):
                     prefix = prefix[idx]
@@ -1157,12 +1161,18 @@ class GitWriter:
                 ctree = self.repo.get_tree(c1.tree)
                 c1.tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
 
-                c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
+                if idx in graph.tails:
+                    c1.parents = [init]
 
-                if prefix:
-                    max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
-                    max_tree = self.grafts[max_parent].tree
-                    c1.tree, ctree = self.merge_tree(max_tree, c1.tree, prefix)
+                    if prefix:
+                        c1.tree, ctree = self.merge_tree(init_tree, tree, prefix)
+                else:
+                    c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
+
+                    if prefix:
+                        max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
+                        max_tree = self.grafts[max_parent].tree
+                        c1.tree, ctree = self.merge_tree(max_tree, c1.tree, prefix)
 
                 if fix_commit is not None:
                     c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
