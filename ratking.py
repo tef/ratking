@@ -1100,12 +1100,15 @@ class GitWriter:
         init = self.head
         init_tree = self.tree
         graph = branch.graph
-        count = dict(graph.parent_count)
-        to_graft = []
 
 
         graph_total = len(graph.commits)
         graph_count = 0
+
+        new_heads = {}
+
+        total = len(branch.linear)
+        depth = 0
 
         for idx in graph.tails:
             if idx not in self.grafts:
@@ -1134,23 +1137,15 @@ class GitWriter:
                 c1 = graft.commit
                 c2 = graft.idx
                 ctree = graft.tree
-                self.grafts[idx] = Graft(c2, c1, c1.tree, ctree)
 
             graph_count += 1
 
-            for n in graph.children[idx]:
-                count[n] -= 1
-                if count[n] == 0:
-                    to_graft.append(n)
-
-        new_heads = {}
-
-        total = len(branch.linear)
-        depth = 0
 
 
-        while to_graft:
-            idx = to_graft.pop(0)
+        for idx in graph.walk_tails():
+            if idx in graph.tails:
+                continue
+
             if idx not in self.grafts:
                 prefix = graph_prefix
                 if isinstance(prefix, dict):
@@ -1165,11 +1160,8 @@ class GitWriter:
                 c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
 
                 if prefix:
-                    if idx in graph.tails:
-                        max_tree = init_tree
-                    else:
-                        max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
-                        max_tree = self.grafts[max_parent].tree
+                    max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
+                    max_tree = self.grafts[max_parent].tree
                     c1.tree, ctree = self.merge_tree(max_tree, c1.tree, prefix)
 
                 if fix_commit is not None:
@@ -1186,12 +1178,7 @@ class GitWriter:
 
             graph_count += 1
 
-            if graph.children[idx]:
-                for n in graph.children[idx]:
-                    count[n] -= 1
-                    if count[n] == 0:
-                        to_graft.append(n)
-            else:
+            if not graph.children[idx]:
                 new_heads[idx] = c2
 
             c_depth = branch.linear_parent[idx]
