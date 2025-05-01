@@ -1110,43 +1110,8 @@ class GitWriter:
         total = len(branch.linear)
         depth = 0
 
-        for idx in graph.tails:
-            if idx not in self.grafts:
-                if idx in graph.fragments:
-                    raise Exception("fragment missing")
-                prefix = graph_prefix
-                if isinstance(prefix, dict):
-                    prefix = prefix[idx]
-                if prefix and not isinstance(prefix, set):
-                    raise Exception("bad prefix, must be set or dict of set")
-
-                c1 = graph.commits[idx]
-                ctree = self.repo.get_tree(c1.tree)
-                tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
-                c1.parents = [init]
-
-                if prefix:
-                    c1.tree, ctree = self.merge_tree(init_tree, tree, prefix)
-                if fix_commit is not None:
-                    c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
-                c2 = self.repo.write_commit(c1)
-
-                self.grafts[idx] = Graft(c2, c1, c1.tree, ctree)
-
-            else:
-                graft = self.grafts[idx]
-                c1 = graft.commit
-                c2 = graft.idx
-                ctree = graft.tree
-
-            graph_count += 1
-
-
 
         for idx in graph.walk_tails():
-            if idx in graph.tails:
-                continue
-
             if idx not in self.grafts:
                 if idx in graph.fragments:
                     raise Exception("fragment missing")
@@ -1165,7 +1130,7 @@ class GitWriter:
                     c1.parents = [init]
 
                     if prefix:
-                        c1.tree, ctree = self.merge_tree(init_tree, tree, prefix)
+                        c1.tree, ctree = self.merge_tree(init_tree, c1.tree, prefix)
                 else:
                     c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
 
