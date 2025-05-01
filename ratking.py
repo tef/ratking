@@ -1102,8 +1102,12 @@ class GitBranch:
             prev = self.repo.write_commit(c1)
         return prev
 
+    def graft(self, branch, init_tree, bad_files, fix_commit):
+        pass
+        
 
-    def _graft(self, init_graph, init_tree, branch, graph_prefix, bad_files, fix_commit):
+    
+    def old_graft(self, init_graph, init_tree, branch, graph_prefix, bad_files, fix_commit):
         init = init_graph.head
         graph = branch.graph
         count = dict(graph.parent_count)
