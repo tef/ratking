@@ -11,6 +11,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from glob import translate as glob_to_regex
 
+import pygit2
+
+GIT_DIR_MODE = 0o040_000
+GIT_FILE_MODE = 0o100_644
+GIT_FILE_MODE2 = 0o100_664
+GIT_EXEC_MODE = 0o100_755
+GIT_LINK_MODE = 0o120_000
+GIT_GITLINK_MODE = 0o160_000 # actually a submodule, blegh
+GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904" # Wow, isn't git amazing.
+
+
 @functools.cache
 def compile_pattern(pattern):
     regex = glob.translate(pattern, recursive=True)
@@ -22,16 +33,6 @@ def glob_match(pattern, string):
     rx = compile_pattern(pattern)
     return rx.match(string) is not None
 
-
-import pygit2
-
-GIT_DIR_MODE = 0o040_000
-GIT_FILE_MODE = 0o100_644
-GIT_FILE_MODE2 = 0o100_664
-GIT_EXEC_MODE = 0o100_755
-GIT_LINK_MODE = 0o120_000
-GIT_GITLINK_MODE = 0o160_000 # actually a submodule, blegh
-GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904" # Wow, isn't git amazing.
 
 class AuthCallbacks(pygit2.RemoteCallbacks):
     def credentials(self, url, username_from_url, allowed_types):
@@ -57,12 +58,12 @@ class GitCommit:
 
     def __eq__(self, other):
         return all((
-                self.tree == other.tree,
-                self.parents == other.parents,
-                self.max_date == other.max_date,
-                self.author == other.author,
-                self.committer == other.committer, 
-                self.message == other.message,
+            self.tree == other.tree,
+            self.parents == other.parents,
+            self.max_date == other.max_date,
+            self.author == other.author,
+            self.committer == other.committer,
+            self.message == other.message,
         ))
 
 @dataclass
@@ -77,7 +78,7 @@ class GitGraph:
     parents: dict
     parent_count: dict
     children: dict
-    fragments: set 
+    fragments: set
 
     def clone(self):
         return GitGraph(
@@ -240,7 +241,7 @@ class GitGraph:
         # validate walk through counts
 
         for f in self.tails:
-            if self.parents[f]: 
+            if self.parents[f]:
                 raise Exception("bad")
 
         walked = set(self.tails)
@@ -250,7 +251,7 @@ class GitGraph:
 
         while search:
             i = search.pop(0)
-            
+
             if counts[i] != 0:
                 raise Exception("bad")
 
@@ -404,6 +405,25 @@ class GitBranch:
             linear_parent = dict(self.linear_parent),
         )
 
+    def common_ancestor(self, right):
+        left = self
+        left_children, right_children = left.graph.children, right.graph.children
+
+        before, after = None, None
+        for x, y in zip(left.linear, right.linear):
+            if x != y:
+                after = y
+                break
+
+            if left_children[x] != right_children[y]:
+                after = y
+                break
+
+            before = x
+            # XXX: skip consolidating, as more branch history
+        return before, after
+
+
     def validate(self):
         self.graph.validate()
         graph = self.graph
@@ -424,7 +444,7 @@ class GitBranch:
             raise Exception("what")
         if history[-1] != self.head:
             raise Exception("how")
-        
+
         if history != self.linear:
             raise Exception("wrong linear")
 
@@ -452,7 +472,7 @@ class GitBranch:
 
         while search:
             i = search.pop(0)
-            
+
             if i not in linear_depth:
                 linear_depth[i] = max(linear_depth[p] for p in graph.parents[i])
 
@@ -469,25 +489,7 @@ class GitBranch:
                     print(x, y, self.linear_parent[x])
             raise Exception("welp")
 
-    def common_ancestor(self, right):
-        left = self
-        left_children, right_children = left.graph.children, right.graph.children
-
-        before, after = None, None
-        for x, y in zip(left.linear, right.linear):
-            if x != y:
-                after = y
-                break
-
-            if left_children[x] != right_children[y]:
-                after = y
-                break
-
-            before = x
-            # XXX: skip consolidating, as more branch history
-        return before, after
-
-    def add_named_fragment(self, name, head, other): 
+    def add_named_fragment(self, name, head, other):
         graph = self.graph
         graph.add_fragment(other)
 
@@ -581,7 +583,7 @@ class GitBranch:
                 all_named_heads[f"{name}/{k}"] = v
 
         # create a new linear history
-    
+
         history = [list(h) for h in all_linear]
         new_history = []
 
@@ -616,8 +618,8 @@ class GitBranch:
 
         if new_history != new_history2:
             raise Exception("welp")
-        
-    
+
+
         head = linear[-1]
         tail = linear[0]
 
@@ -658,7 +660,7 @@ class GitBranch:
 
         merged_graph.heads = {l for l in merged_graph.heads if not merged_graph.children[l]}
 
-        # validate rewrite 
+        # validate rewrite
 
         prev = linear[0]
         date = merged_graph.commits[linear[0]].max_date
@@ -695,7 +697,7 @@ class GitBranch:
 
         # for each source branch
         #    find new linear history for each point, and that it always goes up
-        #    for each commit, check it has the new value 
+        #    for each commit, check it has the new value
 
         for name, branch in branches.items():
             graph = branch.graph
@@ -717,7 +719,7 @@ class GitBranch:
         # { "name of commit" : {"upstream":"commit"}}
 
         for point_name, merge_points in named_heads.items():
-                
+
             all_merge_points =  [(idx, name, branches[name].linear_parent[idx], linear_parent[idx]) for name, idx in merge_points.items()]
             all_merge_points.sort(key=lambda x:x[3])
 
@@ -743,7 +745,7 @@ class GitBranch:
                 prefix[c].add(name)
 
         branch = GitBranch(
-                name = name, 
+                name = name,
                 graph = merged_graph,
                 head = head,
                 tail = tail,
@@ -851,52 +853,6 @@ class GitRepo:
         out = self.write_commit(c)
         return out
 
-    def clean_tree(self, addr, old_tree, bad_files):
-        entries = []
-        dropped = False
-        for i in old_tree.entries:
-            name = i[1]
-            bad = bad_files.get(name, None)
-            if bad is None:
-                entries.append(i)
-            elif callable(bad):
-                out = bad(i[0],i[1],i[2])
-                if out:
-                    entries.append(out)
-                    if out != i:
-                        dropped=True
-                else:
-                    dropped=True
-            elif isinstance(bad, dict):
-                sub_tree = self.get_tree(i[2])
-                new_addr, tree_obj = self.clean_tree(i[2], sub_tree, bad)
-                if new_addr != i[2]:
-                    entries.append((i[0], i[1], new_addr))
-                    dropped = True
-            else:
-                dropped = True
-                pass # delete it, if it's an empty hash
-        if not dropped:
-            return addr, old_tree
-        new_tree = GitTree(entries)
-        return self.write_tree(new_tree), new_tree
-
-    def prefix_tree(self, tree, prefix):
-        entries = []
-        for p in prefix:
-            e = (GIT_DIR_MODE, p, tree)
-            entries.append(e)
-        t = GitTree(entries)
-        return self.write_tree(t), t
-
-    def merge_tree(self, prev_tree, tree, prefix):
-        entries = [e for e in prev_tree.entries if e[1] not in prefix]
-        for p in prefix:
-            e = (GIT_DIR_MODE, p, tree)
-            entries.append(e)
-        t = GitTree(entries)
-        return self.write_tree(t), t
-
     def get_branch_head(self, name):
         if name in self.git.branches:
             return str(self.git.branches[name].target)
@@ -944,7 +900,7 @@ class GitRepo:
         search = [head]
         while search:
             idx = search.pop(0)
-                
+
             c = commits[idx]
             if idx in known:
                 c.parents = []
@@ -1087,6 +1043,53 @@ class GitWriter:
             out = {k:v.idx for k,v in self.grafts.items}
             json.dump(out, fh, sort_keys=True, indent=2)
 
+    def clean_tree(self, addr, old_tree, bad_files):
+        entries = []
+        dropped = False
+        for i in old_tree.entries:
+            name = i[1]
+            bad = bad_files.get(name, None)
+            if bad is None:
+                entries.append(i)
+            elif callable(bad):
+                out = bad(i[0],i[1],i[2])
+                if out:
+                    entries.append(out)
+                    if out != i:
+                        dropped=True
+                else:
+                    dropped=True
+            elif isinstance(bad, dict):
+                sub_tree = self.repo.get_tree(i[2])
+                new_addr, tree_obj = self.clean_tree(i[2], sub_tree, bad)
+                if new_addr != i[2]:
+                    entries.append((i[0], i[1], new_addr))
+                    dropped = True
+            else:
+                dropped = True
+                pass # delete it, if it's an empty hash
+        if not dropped:
+            return addr, old_tree
+        new_tree = GitTree(entries)
+        return self.repo.write_tree(new_tree), new_tree
+
+    def prefix_tree(self, tree, prefix):
+        entries = []
+        for p in prefix:
+            e = (GIT_DIR_MODE, p, tree)
+            entries.append(e)
+        t = GitTree(entries)
+        return self.repo.write_tree(t), t
+
+    def merge_tree(self, prev_tree, tree, prefix):
+        entries = [e for e in prev_tree.entries if e[1] not in prefix]
+        for p in prefix:
+            e = (GIT_DIR_MODE, p, tree)
+            entries.append(e)
+        t = GitTree(entries)
+        return self.repo.write_tree(t), t
+
+
     def shallow_merge(self, branches, bad_files, fix_commit):
         init = self.head
         heads = []
@@ -1099,21 +1102,21 @@ class GitWriter:
 
         heads.sort(key=lambda x:x[1].max_date)
         entries = []
-        
+
         prev = init
         for head, commit, prefix in heads:
             old_tree = self.repo.get_tree(commit.tree)
-            tree_idx, tree = self.repo.clean_tree(commit.tree, old_tree, bad_files)
+            tree_idx, tree = self.clean_tree(commit.tree, old_tree, bad_files)
 
             entries = [e for e in entries if e[1] not in prefix]
 
             for p in prefix:
                 e = (GIT_DIR_MODE, p, tree_idx)
                 entries.append(e)
-            
+
             t = GitTree(entries)
             tidx = self.repo.write_tree(t)
-    
+
             if fix_commit is not None:
                 author, committer, message = fix_commit(commit,  ", ".join(sorted(prefix)))
             else:
@@ -1156,10 +1159,10 @@ class GitWriter:
                     raise Exception("bad prefix, must be set or dict of set")
 
                 ctree = self.repo.get_tree(c1.tree)
-                tree, ctree = self.repo.clean_tree(c1.tree, ctree, bad_files)
+                tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
                 c1.parents = [init]
                 if prefix:
-                    c1.tree, ctree = self.repo.merge_tree(init_tree, tree, prefix)
+                    c1.tree, ctree = self.merge_tree(init_tree, tree, prefix)
                 if fix_commit is not None:
                     c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
                 c2 = self.repo.write_commit(c1)
@@ -1197,14 +1200,14 @@ class GitWriter:
 
                 c1 = graph.commits[idx]
                 ctree = self.repo.get_tree(c1.tree)
-                c1.tree, ctree = self.repo.clean_tree(c1.tree, ctree, bad_files)
+                c1.tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
 
                 c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
 
                 if prefix:
                     max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
                     max_tree = self.grafts[max_parent].tree
-                    c1.tree, ctree = self.repo.merge_tree(max_tree, c1.tree, prefix)
+                    c1.tree, ctree = self.merge_tree(max_tree, c1.tree, prefix)
 
                 if fix_commit is not None:
                     c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
@@ -1240,7 +1243,7 @@ class GitWriter:
         for x in graph.commits:
             if x not in self.grafts:
                 raise Exception("missing")
-    
+
         self.head = self.grafts[branch.head].idx
         self.named_heads.update({k: self.grafts[v].idx for k,v in branch.named_heads.items()})
         return self.head
@@ -1253,7 +1256,7 @@ class GitWriter:
 #       branch.new_head()
 #       branch.new_tail(tail, head)
 #       writer.graft(..., replace_trees = {init.tree:empty{}})
-#       
+#
 #       repo.clean_branch, repo.prefix_branch, repo.interweave
 #           take and return a new branch, saved
 
@@ -1266,7 +1269,7 @@ class GitWriter:
 # xxx - Processor()
 #       fold mkrepo.py up into more general class
 # xxx - GitGraph
-#       graph.properties = set([monotonic, monotonic-author, monotonic-committer]) 
+#       graph.properties = set([monotonic, monotonic-author, monotonic-committer])
 #
 # xxx - preserving old commit names in headers / changes
 #
@@ -1287,7 +1290,7 @@ class GitWriter:
 #
 #       i.e. non_linear_depth[x] = {project:n, project:n}
 #       build by walk up from roots, and store a dict of the last 'linear' version of a subtree was
-#             
+#
 #
 # xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
 
