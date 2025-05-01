@@ -1089,7 +1089,6 @@ class GitWriter:
         t = GitTree(entries)
         return self.repo.write_tree(t), t
 
-
     def shallow_merge(self, branches, bad_files, fix_commit):
         init = self.head
         heads = []
@@ -1248,9 +1247,15 @@ class GitWriter:
         self.named_heads.update({k: self.grafts[v].idx for k,v in branch.named_heads.items()})
         return self.head
 
+###
+#       graph.trees, and write_tree handlign nested Tree{Tree...}} 
+#
+#       maybe graph carries "base_parent" and "prefix" 
+#           so that graft knows which parent to inherit from
+#       or pass in base_parent=lambda idx: base_parent[idx]}
 
 #### todo
-#
+#       graph.child_count
 #       graph.walk_forwards() graph.walk_backwards() iterators
 #
 #       branch.new_head()
@@ -1259,8 +1264,8 @@ class GitWriter:
 #
 #       repo.clean_branch, repo.prefix_branch, repo.interweave
 #           take and return a new branch, saved
-
-#### nice to have
+#       repo.intersect / repo.rewrite(branch, fix_commit=...)
+#
 # xxx - shallow merge is a proper writer and stores grafts
 #       maybe calls branch.interweave_heads(....)
 #
@@ -1277,11 +1282,18 @@ class GitWriter:
 
 
 #### merging thoughts
-#
+# 
 # xxx - move max parent logic out of graft
-#       either pre-merge the trees in interweave (thus graph.trees)
-#       or pass a callback
+#       - write the trees and commits and create a proper branch before grafting
+#       - store the trees inside graph.trees and nest them
+#           write_tree recurses and dumps all
+#           load_tree can recurse=True
+#       - pass in a callback to graft fix_tree(commit, tree)
+#       - calculate a parent_tree dict and pass it in, etc
 #
+#       fix tree allows me to preserve behaviour / push logic into script
+#       so what, it's branch.intersect, and repo.intersect writes the actual commits
+#       
 # xxx - general idea of finer grained merges, file based or subdirectory based
 #
 #       non linear parents? i.e i tag each tail with which repo it comes from
@@ -1294,3 +1306,5 @@ class GitWriter:
 #
 # xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
 
+# xxx - merging with other histories other than linear
+#       and maybe not merging by replacing the first parent
