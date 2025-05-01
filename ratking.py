@@ -79,12 +79,6 @@ class GitGraph:
     children: dict
     fragments: set 
 
-    named_heads: set
-    head: str
-    tail: str
-    linear: dict
-    linear_parent: dict
-
     def clone(self):
         return GitGraph(
             commits = dict(self.commits),
@@ -93,11 +87,6 @@ class GitGraph:
             children = {k:set(v) for k,v in self.children.items()},
             parents = {k:list(v) for k,v in self.parents.items()},
             parent_count = dict(parent_count),
-            head = str(self.head),
-            tail = str(self.tail),
-            named_heads = dict(self.named_heads),
-            linear = list(self.linear),
-            linear_parent = dict(self.linear_parent),
             fragments = set(self.fragments),
         )
 
@@ -131,46 +120,9 @@ class GitGraph:
             if not self.children[l]:
                 self.heads.add(l)
 
-        start = [(self.linear_parent.get(x), x) for x in other.tails]
-        start.sort(reverse=True, key=lambda x: x[0])
-
-        new_linear_parent = dict(self.linear_parent)
-
-        for n, idx in start:
-            search = []
-            search.extend(c for c in self.children[idx] if c not in new_linear_parent)
-            while search:
-                top = search.pop(0)
-                if top not in new_linear_parent:
-                    new_linear_parent[top] = n
-                    search.extend(c for c in self.children[top] if c not in new_linear_parent)
-
-        missing = set(self.commits) - set(new_linear_parent)
-
-        if missing:
-            raise Exception("what")
-
-        new_linear_parent2 = GitBranch.make_linear_parent(self.linear, self.tails, self.children)
-        if new_linear_parent != new_linear_parent2:
-            for k, v in new_linear_parent.items():
-                v2 = new_linear_parent2[k]
-                if v != v2:
-                    print(v,v2)
-            raise Exception("no")
-
-        for k, v in self.linear_parent.items():
-            if new_linear_parent[k] != v:
-                raise Exception("error")
-            if new_linear_parent2[k] != v:
-                raise Exception("error")
-
-        self.linear_parent = new_linear_parent
-
         return self
 
     def validate(self):
-        head = self.head
-
         # all tails items have no parents
 
         for f in self.tails:
@@ -191,7 +143,8 @@ class GitGraph:
             # fragment can have children if it's found from branch head
             # or no children if it's just the branch head
 
-        # children[x] = set(commits that have x as a parent)
+        # validate children
+
         inverted_children = {}
 
         for idx in self.commits:
@@ -211,60 +164,9 @@ class GitGraph:
                     print("child commit", child, "parents", c.parents)
                     raise Exception("child listed, not in parent")
 
-            lb = self.linear_parent[idx] -1
+        # validate parents
 
-            if self.linear[lb] == idx and lb > 0:
-                c_prev = self.parents[idx][0]
-                l_prev = self.linear[lb-1]
-                if l_prev != c_prev:
-                    raise Exception("linear mismatch")
-
-        # validate linear path
-
-        history = [head]
-        p = self.parents[head]
-        while p:
-            p = p[0]
-            history.append(p)
-            p = self.parents[p]
-
-        history.reverse()
-
-        if history[0] not in self.tails:
-            raise Exception("what")
-        if history[-1] != head:
-            raise Exception("how")
-        
-        if history != self.linear:
-            raise Exception("wrong linear")
-
-        history.sort(key=lambda idx: self.commits[idx].max_date)
-
-        if history != self.linear:
-            raise Exception("time travel")
-
-        linear_parent = GitBranch.make_linear_parent(self.linear, self.tails, self.children)
-
-        if linear_parent != self.linear_parent:
-            print("extra keys",set(linear_parent) - set(self.linear_parent))
-            print("missing keys",set(self.linear_parent) - set(linear_parent))
-
-            raise Exception("missing linear parent")
-
-        # walk backwards from heads
-
-        found_tails = set()
-        walked = set([head])
-        search = [head]
-        for h in self.heads:
-            if h not in walked:
-                walked.add(h)
-                search.append(h)
-
-        # all commits parents are correctly indexed
-        while search:
-            c = search.pop(0)
-
+        for c in self.commits:
             commit_parents = self.commits[c].parents
             graph_parents = self.parents[c]
             child_parents  = inverted_children.get(c, set())
@@ -281,6 +183,16 @@ class GitGraph:
             if self.parent_count[c] != len(self.parents[c]):
                 raise Exception("bad count")
 
+
+        # walk backwards from heads
+
+        found_tails = set()
+        walked = set(self.heads)
+        search = list(walked)
+
+        while search:
+            c = search.pop(0)
+            graph_parents = self.parents[c]
             if graph_parents:
                 for p in graph_parents:
                     if p not in walked:
@@ -336,16 +248,11 @@ class GitGraph:
         counts = dict(self.parent_count)
         heads = set()
 
-        linear_depth = {f: self.linear_parent[f] for f in self.linear}
-        linear_depth.update({f: self.linear_parent[f] for f in self.tails})
-
         while search:
             i = search.pop(0)
             
             if counts[i] != 0:
                 raise Exception("bad")
-            if i not in linear_depth:
-                linear_depth[i] = max(linear_depth[p] for p in self.parents[i])
 
             if self.children[i]:
                 for c in self.children[i]:
@@ -380,13 +287,6 @@ class GitGraph:
             print(heads, head)
             print(len(walked), len(self.commits), len(self.tails))
             raise Exception("missing commits")
-
-        if linear_depth != self.linear_parent:
-            print(len(linear_depth), len(self.linear_parent))
-            for x,y in linear_depth.items():
-                if self.linear_parent[x] != y:
-                    print(x, y, self.linear_parent[x])
-            raise Exception("welp")
 
 
     @classmethod
@@ -446,6 +346,42 @@ class GitGraph:
             fragments = all_fragments,
         )
 
+    def Branch(self, name, head, named_heads):
+        history = [head]
+        n = head
+
+        while n is not None:
+            p = self.parents.get(n)
+            p = p[0] if p else None
+            if p is None:
+                break
+            history.append(p)
+            n = p
+
+        history.reverse()
+        date = self.commits[history[0]].max_date
+        for i in history[1:]:
+            new_date = self.commits[i].max_date
+            if new_date < date:
+                raise Exception("time travel")
+
+        # XXX set property
+
+        linear_parent = GitBranch.make_linear_parent(history, self.tails, self.children)
+
+        if set(self.commits) != set(linear_parent):
+            raise Exception(f'bad {len(self.commits)} {len(linear_parent)}')
+
+        return GitBranch(
+            name = name,
+            head = head,
+            graph = self,
+            tail = history[0],
+            linear = history,
+            linear_parent = linear_parent,
+            named_heads = named_heads,
+        )
+
 
 
 @dataclass
@@ -453,19 +389,107 @@ class GitBranch:
     name: str
     head: str
     graph: object
-    named_heads: str
+    named_heads: dict
+    tail: str
+    linear: dict
+    linear_parent: dict
+
+
+
+    def clone(self):
+        return GitBranch(
+            name = str(name),
+            head = str(self.head),
+            graph = graph.clone(),
+            tail = str(self.tail),
+            named_heads = dict(self.named_heads),
+            linear = list(self.linear),
+            linear_parent = dict(self.linear_parent),
+        )
 
     def validate(self):
         self.graph.validate()
 
-        # all named heads exist
-        # head, tail exist
+        # xxx all named heads exist
+        # xxx head, tail exist
 
         # linear path is valid
 
+        graph = self.graph
+
+        # validate linear path
+        for idx in graph.commits:
+            lb = self.linear_parent[idx] -1
+
+            if self.linear[lb] == idx and lb > 0:
+                c_prev = graph.parents[idx][0]
+                l_prev = self.linear[lb-1]
+                if l_prev != c_prev:
+                    raise Exception("linear mismatch")
+
+
+        # xxx - graph.first_parent()
+        history = [self.head]
+        p = graph.parents[self.head]
+        while p:
+            p = p[0]
+            history.append(p)
+            p = graph.parents[p]
+
+        history.reverse()
+
+        if history[0] not in graph.tails:
+            raise Exception("what")
+        if history[-1] != self.head:
+            raise Exception("how")
+        
+        if history != self.linear:
+            raise Exception("wrong linear")
+
+        history.sort(key=lambda idx: graph.commits[idx].max_date)
+
+        if history != self.linear:
+            raise Exception("time travel")
+
+        linear_parent = GitBranch.make_linear_parent(self.linear, graph.tails, graph.children)
+
+        if linear_parent != self.linear_parent:
+            print("extra keys",set(linear_parent) - set(self.linear_parent))
+            print("missing keys",set(self.linear_parent) - set(linear_parent))
+
+            raise Exception("missing linear parent")
+
+        # validate linear_depth through counts
+
+        walked = set(graph.tails)
+        search = list(graph.tails)
+        counts = dict(graph.parent_count)
+
+        linear_depth = {f: self.linear_parent[f] for f in self.linear}
+        linear_depth.update({f: self.linear_parent[f] for f in graph.tails})
+
+        while search:
+            i = search.pop(0)
+            
+            if i not in linear_depth:
+                linear_depth[i] = max(linear_depth[p] for p in graph.parents[i])
+
+            for c in graph.children[i]:
+                counts[c] -= 1
+                if counts[c] == 0:
+                    walked.add(c)
+                    search.append(c)
+
+        if linear_depth != self.linear_parent:
+            print(len(linear_depth), len(self.linear_parent))
+            for x,y in linear_depth.items():
+                if self.linear_parent[x] != y:
+                    print(x, y, self.linear_parent[x])
+            raise Exception("welp")
+
     @classmethod
     def common_ancestor(self, left, right):
-        left, right = left.graph, right.graph
+        left_children, right_children = left.graph.children, right.graph.children
 
         before, after = None, None
         for x, y in zip(left.linear, right.linear):
@@ -473,7 +497,7 @@ class GitBranch:
                 after = y
                 break
 
-            if left.children[x] != right.children[y]:
+            if left_children[x] != right_children[y]:
                 after = y
                 break
 
@@ -481,9 +505,50 @@ class GitBranch:
             # XXX: skip consolidating, as more branch history
         return before, after
 
-    def add_named_fragment(self, name, fragment): 
-        self.graph.add_fragment(fragment)
-        self.named_heads[name] = fragment.head
+    def add_named_fragment(self, name, head, other): 
+        graph = self.graph
+        graph.add_fragment(other)
+
+        start = [(self.linear_parent.get(x), x) for x in other.tails]
+        start.sort(reverse=True, key=lambda x: x[0])
+
+        new_linear_parent = dict(self.linear_parent)
+
+        for n, idx in start:
+            search = []
+            search.extend(c for c in graph.children[idx] if c not in new_linear_parent)
+            while search:
+                top = search.pop(0)
+                if top not in new_linear_parent:
+                    new_linear_parent[top] = n
+                    search.extend(c for c in graph.children[top] if c not in new_linear_parent)
+
+        self.linear_parent = new_linear_parent
+        self.named_heads[name] = head
+
+        ## validation
+
+        missing = set(graph.commits) - set(new_linear_parent)
+
+        if missing:
+            raise Exception("what")
+
+        ## extra check
+
+        new_linear_parent2 = GitBranch.make_linear_parent(self.linear, graph.tails, graph.children)
+        if new_linear_parent != new_linear_parent2:
+            for k, v in new_linear_parent.items():
+                v2 = new_linear_parent2[k]
+                if v != v2:
+                    print(v,v2)
+            raise Exception("no")
+
+        for k, v in self.linear_parent.items():
+            if new_linear_parent[k] != v:
+                raise Exception("error")
+            if new_linear_parent2[k] != v:
+                raise Exception("error")
+
 
     @staticmethod
     def make_linear_parent(history, tails, children):
@@ -513,40 +578,36 @@ class GitBranch:
 
     @classmethod
     def interweave(cls, name, branches, named_heads=None):
-
         graphs = {k:v.graph for k,v in branches.items()}
 
-        merged_graph = cls._interweave(graphs, named_heads=named_heads)
-        merged_graph.validate() # merged
-
-        prefix = {}
-        for name, branch in graphs.items():
-            for c in branch.commits:
-                if c not in prefix:
-                    prefix[c] = set()
-                prefix[c].add(name)
-
-        branch = GitBranch(name, head=merged_graph.head, graph=merged_graph, named_heads=merged_graph.named_heads)
-        return branch, prefix
-
-    @classmethod
-    def _interweave(cls, graphs, named_heads=None):
         all_commits = {}
         all_tails = set()
         all_heads = set()
         all_children = {}
         all_parents = {}
-        all_linear = list()
-        graph_heads = set()
-        graph_tails = set()
-        all_named_heads = {}
         all_fragments = set()
         all_parent_count = dict()
+
+        branch_heads = set()
+        branch_tails = set()
+        all_linear = list()
+        all_named_heads = {}
 
         if named_heads is None:
             named_heads = {}
 
-        for name, graph in graphs.items():
+        for name, branch in branches.items():
+            all_linear.append(list(branch.linear))
+
+            branch_heads.add(branch.head)
+            branch_tails.add(branch.tail)
+
+            for k, v in branch.named_heads.items():
+                all_named_heads[f"{name}/{k}"] = v
+
+            graph = branch.graph
+
+            # xxx . move to graph.union()
             for idx, c in graph.commits.items():
                 if idx in graph.fragments: # skip fake commit
                     if idx not in all_commits:
@@ -576,16 +637,8 @@ class GitBranch:
                     if idx in all_heads:
                         all_heads.remove(idx)
 
-            all_linear.append(list(graph.linear))
-
-            graph_heads.add(graph.head)
-            graph_tails.add(graph.tail)
-
             all_tails.update(f for f in graph.tails if f not in graph.fragments)
             all_heads.update(t for t in graph.heads if not all_children[t])
-
-            for k, v in graph.named_heads.items():
-                all_named_heads[f"{name}/{k}"] = v
     
         history = [list(h) for h in all_linear]
         new_history = []
@@ -680,9 +733,9 @@ class GitBranch:
         head = linear[-1]
         tail = linear[0]
 
-        if head not in graph_heads:
+        if head not in branch_heads:
             raise Exception("bad")
-        if tail not in graph_tails:
+        if tail not in branch_tails:
             # should be one of the .tail of the graphs
             raise Exception("worse")
 
@@ -690,17 +743,18 @@ class GitBranch:
         #    find new linear history for each point, and that it always goes up
         #    for each commit, check it has the new value 
 
-        for name, graph in graphs.items():
-            history_depth = [linear_parent[x] for x in graph.linear]
+        for name, branch in branches.items():
+            graph = branch.graph
+            history_depth = [linear_parent[x] for x in branch.linear]
             if history_depth != sorted(history_depth):
                 raise Exception("history not preserved")
             for c in graph.commits:
-                if graph.linear_parent[c] == 0:
+                if branch.linear_parent[c] == 0:
                     if linear_parent[c] != 0:
                         # XXX - we exclude extra tails and shouldn't fold them in
                         raise Exception("bad")
-                lp = graph.linear_parent[c]
-                lp_idx = graph.linear[lp-1]
+                lp = branch.linear_parent[c]
+                lp_idx = branch.linear[lp-1]
                 nlp = linear_parent[lp_idx]
                 if nlp != linear_parent[c]:
                     raise Exception("bad")
@@ -709,37 +763,53 @@ class GitBranch:
 
         for point_name, merge_points in named_heads.items():
                 
-            all_merge_points =  [(idx, name, graphs[name].linear_parent[idx], linear_parent[idx]) for name, idx in merge_points.items()]
+            all_merge_points =  [(idx, name, branches[name].linear_parent[idx], linear_parent[idx]) for name, idx in merge_points.items()]
             all_merge_points.sort(key=lambda x:x[3])
 
             merge_point = all_merge_points[-1][0]
             merge_point_time = all_merge_points[-1][-1]
 
             for idx, name, old_lp, new_lp in all_merge_points:
-                if old_lp == len(graphs[name].linear):
+                if old_lp == len(branches[name].linear):
                     pass # last commit, no worries
                 else:
-                    next_c = graphs[name].linear[old_lp]
+                    next_c = branches[name].linear[old_lp]
                     next_lp = linear_parent[next_c]
                     if next_lp <= merge_point_time:
                         raise Exception("can't make merge point")
 
             all_named_heads[point_name] = merge_point
 
-        return GitGraph(
+        merged_graph = GitGraph(
             commits = all_commits,
             tails = all_tails,
             heads = all_heads,
             children = all_children,
             parents = all_parents,
             parent_count = all_parent_count,
-            named_heads = all_named_heads,
-            head = head,
-            tail = tail,
-            linear = linear,
-            linear_parent = linear_parent,
             fragments = all_fragments,
         )
+
+
+        prefix = {}
+        for name, branch in graphs.items():
+            for c in branch.commits:
+                if c not in prefix:
+                    prefix[c] = set()
+                prefix[c].add(name)
+
+        branch = GitBranch(
+                name = name, 
+                graph = merged_graph,
+                head = head,
+                tail = tail,
+                linear = linear,
+                linear_parent = linear_parent,
+                named_heads=all_named_heads
+        )
+
+        branch.validate()
+        return branch, prefix
 
 
 class GitRepo:
@@ -969,43 +1039,13 @@ class GitRepo:
             print('c',missing)
             raise Exception()
 
-        history = [head]
-        n = head
-
-        while n is not None:
-            p = parents.get(n)
-            p = p[0] if p else None
-            if p is None:
-                break
-            history.append(p)
-            n = p
-
-        history.reverse()
-        date = commits[history[0]].max_date
-        for i in history[1:]:
-            new_date = commits[i].max_date
-            if new_date < date:
-                raise Exception("time travel")
-
-        # XXX set property
-
-        linear_parent = GitBranch.make_linear_parent(history, tails, children)
-
-        if set(commits) != set(linear_parent):
-            raise Exception(f'bad {len(commits)} {len(linear_parent)}')
-
         return GitGraph(
             commits = commits,
             tails = tails,
             children = children,
             parents = parents,
             parent_count = parent_count,
-            head = head,
-            tail = history[0],
             heads = set([head]),
-            named_heads = {},
-            linear = history,
-            linear_parent = linear_parent,
             fragments = set(f for f in tails if f in known),
         )
 
@@ -1013,28 +1053,27 @@ class GitRepo:
         graph = graph or self.get_graph(head)
         named_heads = dict(named_heads) if named_heads else {}
         named_heads.update(graph.named_heads)
-        return GitBranch(name=name, head=head, graph=graph, named_heads=named_heads)
+        return graph.Branch(name, head, named_heads)
 
 
     def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
         branch_head = self.get_branch_head(branch_name)
-
         branch_graph = self.get_graph(branch_head, replace_parents)
-        branch_graph.validate()
 
-        branch_graph.named_heads[branch_name] = branch_head
+        named_heads = {branch_name: branch_head}
+        branch = graph.Branch(name, head, named_heads)
+        branch.validate()
 
-        return GitBranch(name=branch_name, head=branch_head, graph=branch_graph, named_heads=named_heads)
+        return branch
 
     def get_remote_branch(self, rname, branch_name, include=None, exclude=None, replace_parents=None):
 
         branch_head = self.get_remote_branch_head(rname, branch_name)
         branch_graph = self.get_graph(branch_head, replace_parents)
-        branch_graph.validate()
 
         named_heads = {branch_name: branch_head}
 
-        branch = GitBranch(name=f"{rname}/{branch_name}", head=branch_head, graph=branch_graph, named_heads=named_heads)
+        branch = branch_graph.Branch(name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads)
 
         if include:
             all_remote_branches = self.all_remote_branches()
@@ -1050,11 +1089,11 @@ class GitRepo:
                 graph.validate()
 
                 if all(f in branch_graph.commits for f in graph.tails):
-                    branch.add_named_fragment(name, graph)
+                    branch.add_named_fragment(name, idx, graph)
                 else:
                     pass # orphan branch or new tail commit
-            branch.validate()
 
+        branch.validate()
         return branch
 
     def get_graph_names(self, graph):
@@ -1107,11 +1146,10 @@ class GitWriter:
     def shallow_merge(self, branches, bad_files, fix_commit):
         init = self.head
         heads = []
-        graphs = {k:v.graph for k,v in branches.items()} 
 
-        for name, graph in graphs.items():
-            head = graph.head
-            c = graph.commits[head]
+        for name, branch in branches.items():
+            head = branch.head
+            c = branch.graph.commits[head]
             prefix = [name]
             heads.append((head, c, prefix))
 
@@ -1200,7 +1238,7 @@ class GitWriter:
 
         new_heads = {}
 
-        total = len(graph.linear)
+        total = len(branch.linear)
         depth = 0
 
 
@@ -1220,7 +1258,7 @@ class GitWriter:
                 c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
 
                 if prefix:
-                    max_parent = max(graph.parents[idx], key=graph.linear_parent.get)
+                    max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
                     max_tree = self.grafts[max_parent].tree
                     c1.tree, ctree = self.repo.merge_tree(max_tree, c1.tree, prefix)
 
@@ -1246,7 +1284,7 @@ class GitWriter:
             else:
                 new_heads[idx] = c2
 
-            c_depth = graph.linear_parent[idx]
+            c_depth = branch.linear_parent[idx]
             if c_depth > depth:
                 depth = c_depth
                 per = graph_count/graph_total
@@ -1259,11 +1297,9 @@ class GitWriter:
             if x not in self.grafts:
                 raise Exception("missing")
     
-        self.head = self.grafts[graph.head].idx
-        self.named_heads.update({k: self.grafts[v].idx for k,v in graph.named_heads.items()})
+        self.head = self.grafts[branch.head].idx
+        self.named_heads.update({k: self.grafts[v].idx for k,v in branch.named_heads.items()})
         return self.head
-
-        return fragment
 
 #
 # xxx - 
