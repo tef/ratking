@@ -761,8 +761,10 @@ class GitRepo:
         c_tz = timezone(timedelta(minutes=obj.committer.offset))
         c_date = datetime.fromtimestamp(float(obj.committer.time), c_tz).astimezone(timezone.utc)
 
+        tree = str(obj.tree_id)
+
         return GitCommit(
-                tree = str(obj.tree_id),
+                tree = tree,
                 parents = list(str(x) for x in obj.parent_ids),
                 author=obj.author,
                 committer=obj.committer,
@@ -774,6 +776,11 @@ class GitRepo:
 
 
     def get_tree(self, addr):
+        if isinstance(addr, GitTree):
+            return addr
+        elif not isinstance(addr, str):
+            raise Exception("bad")
+
         obj = self.git.get(addr)
         entries = []
         for i in obj:
@@ -782,8 +789,14 @@ class GitRepo:
         return GitTree(entries)
 
     def write_commit(self, c):
+        tree = c.tree
+        if isinstance(c, GitTree):
+            tree = self.write_tree(tree)
+        elif isinstance(c.tree, str):
+            tree = pygit2.Oid(hex=tree)
+        else:
+            raise Exception('bad')
         parents = [pygit2.Oid(hex=p) for p in c.parents]
-        tree = pygit2.Oid(hex=c.tree)
         out = self.git.create_commit(None, c.author, c.committer, c.message, tree, parents)
         return str(out)
 
@@ -791,7 +804,12 @@ class GitRepo:
         tb = self.git.TreeBuilder()
         t.entries.sort(key=lambda x: x[1] if x[0] != GIT_DIR_MODE else x[1]+'/')
         for mode, name, addr in t.entries:
-            i = pygit2.Oid(hex=addr)
+            if isinstance(addr, GitTree):
+                i = self.write_tree(addr)
+            elif isinstance(addr, str):
+                i = pygit2.Oid(hex=addr)
+            else:
+                raise Exception("bad")
             tb.insert(name, i, mode)
 
         out = tb.write()
@@ -1101,7 +1119,6 @@ class GitWriter:
         init_tree = self.tree
         graph = branch.graph
 
-
         graph_total = len(graph.commits)
         graph_count = 0
 
@@ -1174,8 +1191,7 @@ class GitWriter:
         return self.head
 
 #### todo
-#       graft uses graph.walk_tails()
-#       graph.trees, and write_tree handlign nested Tree{Tree...}} 
+#       git branch combine linear histories
 #
 #       repo.interweave(branches, bad_files, fix_message) 
 #           calls branch interweave, then calls graft
