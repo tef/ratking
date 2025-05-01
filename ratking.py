@@ -653,9 +653,6 @@ class GitRepo:
         if name in self.git.branches:
             return str(self.git.branches[name].target)
 
-    def get_remote_branch_head(self, rname, name):
-        return str(self.git.branches.remote[f"{rname}/{name}"].target)
-
     def write_branch_head(self, name, addr):
         c = self.git.revparse_single(addr)
         self.git.branches.create(name, c, force=True)
@@ -674,11 +671,6 @@ class GitRepo:
         o = self.git.remotes[rname]
         o.fetch(callbacks=AuthCallbacks())
 
-    def get_remote_branch_graph(self, rname, name, replace_parents):
-        head = self.get_remote_branch_head(rname, name)
-        branch = self.get_graph(head, replace_parents)
-        return branch
-
     def all_remote_branches(self, refresh=False):
         if self._all_remotes and not refresh:
             return self._all_remotes
@@ -691,6 +683,14 @@ class GitRepo:
             out[prefix][name] = self.get_remote_branch_head(prefix, name)
         self._all_remotes = out
         return out
+
+    def get_remote_branch_head(self, rname, name):
+        return str(self.git.branches.remote[f"{rname}/{name}"].target)
+
+    def get_remote_branch_graph(self, rname, name, replace_parents):
+        head = self.get_remote_branch_head(rname, name)
+        branch = self.get_graph(head, replace_parents)
+        return branch
 
 
     def get_commit(self, addr):
@@ -738,7 +738,7 @@ class GitRepo:
         out = tb.write()
         return str(out)
 
-    def write_init_commit(self, name, email, timestamp, message):
+    def write_empty_commit(self, name, email, timestamp, message):
         signature = pygit2.Signature(name, email, int(timestamp.timestamp()), 0, "utf-8")
         ts = timestamp.astimezone(timezone.utc),
         c = GitCommit(
@@ -754,6 +754,52 @@ class GitRepo:
 
         out = self.write_commit(c)
         return out
+
+    def clean_tree(self, addr, old_tree, bad_files):
+        entries = []
+        dropped = False
+        for i in old_tree.entries:
+            name = i[1]
+            bad = bad_files.get(name, None)
+            if bad is None:
+                entries.append(i)
+            elif callable(bad):
+                out = bad(i[0],i[1],i[2])
+                if out:
+                    entries.append(out)
+                    if out != i:
+                        dropped=True
+                else:
+                    dropped=True
+            elif isinstance(bad, dict):
+                sub_tree = self.get_tree(i[2])
+                new_addr, tree_obj = self.clean_tree(i[2], sub_tree, bad)
+                if new_addr != i[2]:
+                    entries.append((i[0], i[1], new_addr))
+                    dropped = True
+            else:
+                dropped = True
+                pass # delete it, if it's an empty hash
+        if not dropped:
+            return addr, old_tree
+        new_tree = GitTree(entries)
+        return self.write_tree(new_tree), new_tree
+
+    def prefix_tree(self, tree, prefix):
+        entries = []
+        for p in prefix:
+            e = (GIT_DIR_MODE, p, tree)
+            entries.append(e)
+        t = GitTree(entries)
+        return self.write_tree(t), t
+
+    def merge_tree(self, prev_tree, tree, prefix):
+        entries = [e for e in prev_tree.entries if e[1] not in prefix]
+        for p in prefix:
+            e = (GIT_DIR_MODE, p, tree)
+            entries.append(e)
+        t = GitTree(entries)
+        return self.write_tree(t), t
 
     def get_fragment(self, head):
         init = self.get_commit(head)
@@ -771,25 +817,6 @@ class GitRepo:
             linear_parent = {head:1},
             fragments = set([head]),
         )
-
-    def get_names(self, head):
-        names = {}
-        graph = self.get_graph(head)
-
-        def add_name(i,n):
-            if n not in names:
-                names[n] = set()
-            names[n].add(i)
-
-        for i, c in graph.commits.items():
-            add_name(i, str(c.author))
-            add_name(i, str(c.committer))
-
-            for line in c.message.splitlines():
-                if "Co-authored-by: " in line:
-                    _, name = line.rsplit("Co-authored-by: ", 1)
-                    add_name(i, name.strip())
-        return names
 
 
     def get_graph(self, head, replace_parents=None, known=None):
@@ -889,6 +916,13 @@ class GitRepo:
             fragments = set(f for f in tails if f in known),
         )
 
+    def new_branch(self, name, head, graph=None, named_heads=None):
+        graph = graph or self.get_graph(head)
+        named_heads = dict(named_heads) if named_heads else {}
+        named_heads.update(graph.named_heads)
+        return GitBranch(self, head=head, graph=graph, named_heads=named_heads)
+
+
     def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
         branch_head = self.get_branch_head(branch_name)
 
@@ -934,22 +968,24 @@ class GitRepo:
     def Branch(self):
         return GitBranch(self)
 
-    def interweave(self, branches, named_heads=None):
+    def get_names(self, head):
+        names = {}
+        graph = self.get_graph(head)
 
-        graphs = {k:v.graph for k,v in branches.items()}
+        def add_name(i,n):
+            if n not in names:
+                names[n] = set()
+            names[n].add(i)
 
-        merged_graph = GitGraph.interweave(graphs, named_heads=named_heads)
-        merged_graph.validate() # merged
+        for i, c in graph.commits.items():
+            add_name(i, str(c.author))
+            add_name(i, str(c.committer))
 
-        prefix = {}
-        for name, branch in graphs.items():
-            for c in branch.commits:
-                if c not in prefix:
-                    prefix[c] = set()
-                prefix[c].add(name)
-
-        branch = GitBranch(self, head=merged_graph.head, graph=merged_graph, named_heads=merged_graph.named_heads)
-        return branch, prefix
+            for line in c.message.splitlines():
+                if "Co-authored-by: " in line:
+                    _, name = line.rsplit("Co-authored-by: ", 1)
+                    add_name(i, name.strip())
+        return names
 
 
 
@@ -977,51 +1013,49 @@ class GitBranch:
             out = {k:v.idx for k,v in self.grafts.items}
             json.dump(out, fh, sort_keys=True, indent=2)
 
-    def clean_tree(self, addr, old_tree, bad_files):
-        entries = []
-        dropped = False
-        for i in old_tree.entries:
-            name = i[1]
-            bad = bad_files.get(name, None)
-            if bad is None:
-                entries.append(i)
-            elif callable(bad):
-                out = bad(i[0],i[1],i[2])
-                if out:
-                    entries.append(out)
-                    if out != i:
-                        dropped=True
-                else:
-                    dropped=True
-            elif isinstance(bad, dict):
-                sub_tree = self.repo.get_tree(i[2])
-                new_addr, tree_obj = self.clean_tree(i[2], sub_tree, bad)
-                if new_addr != i[2]:
-                    entries.append((i[0], i[1], new_addr))
-                    dropped = True
-            else:
-                dropped = True
-                pass # delete it, if it's an empty hash
-        if not dropped:
-            return addr, old_tree
-        new_tree = GitTree(entries)
-        return self.repo.write_tree(new_tree), new_tree
+    @classmethod
+    def interweave(cls, branches, named_heads=None):
 
-    def prefix_tree(self, tree, prefix):
-        entries = []
-        for p in prefix:
-            e = (GIT_DIR_MODE, p, tree)
-            entries.append(e)
-        t = GitTree(entries)
-        return self.repo.write_tree(t), t
+        repos = {b.repo for b in branches.values()}
 
-    def merge_tree(self, prev_tree, tree, prefix):
-        entries = [e for e in prev_tree.entries if e[1] not in prefix]
-        for p in prefix:
-            e = (GIT_DIR_MODE, p, tree)
-            entries.append(e)
-        t = GitTree(entries)
-        return self.repo.write_tree(t), t
+        if len(repos) != 1:
+            raise Exception("branches must come from same repo")
+
+        repo = repos.pop()
+
+        graphs = {k:v.graph for k,v in branches.items()}
+
+        merged_graph = GitGraph.interweave(graphs, named_heads=named_heads)
+        merged_graph.validate() # merged
+
+        prefix = {}
+        for name, branch in graphs.items():
+            for c in branch.commits:
+                if c not in prefix:
+                    prefix[c] = set()
+                prefix[c].add(name)
+
+        branch = GitBranch(repo, head=merged_graph.head, graph=merged_graph, named_heads=merged_graph.named_heads)
+        return branch, prefix
+
+    @classmethod
+    def common_ancestor(self, left, right):
+        left, right = left.graph, right.graph
+
+        before, after = None, None
+        for x, y in zip(left.linear, right.linear):
+            if x != y:
+                after = y
+                break
+
+            if left.children[x] != right.children[y]:
+                after = y
+                break
+
+            before = x
+            # XXX: skip consolidating, as more branch history
+        return before, after
+
 
     def shallow_merge(self, init, graphs, bad_files, fix_commit):
         heads = []
@@ -1038,7 +1072,7 @@ class GitBranch:
         prev = init
         for head, commit, prefix in heads:
             old_tree = self.repo.get_tree(commit.tree)
-            tree_idx, tree = self.clean_tree(commit.tree, old_tree, bad_files)
+            tree_idx, tree = self.repo.clean_tree(commit.tree, old_tree, bad_files)
 
             entries = [e for e in entries if e[1] not in prefix]
 
@@ -1069,7 +1103,7 @@ class GitBranch:
         return prev
 
 
-    def graft(self, init_graph, init_tree, branch, graph_prefix, bad_files, fix_commit):
+    def _graft(self, init_graph, init_tree, branch, graph_prefix, bad_files, fix_commit):
         init = init_graph.head
         graph = branch.graph
         count = dict(graph.parent_count)
@@ -1084,13 +1118,17 @@ class GitBranch:
                 if idx in graph.fragments:
                     raise Exception("fragment missing")
                 c1 = graph.commits[idx]
-                prefix = graph_prefix[idx] if graph_prefix is not None else None
+                prefix = graph_prefix
+                if isinstance(prefix, dict):
+                    prefix = prefix[idx]
+                if prefix and not isinstance(prefix, set):
+                    raise Exception("bad prefix, must be set or dict of set")
 
                 ctree = self.repo.get_tree(c1.tree)
-                tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
+                tree, ctree = self.repo.clean_tree(c1.tree, ctree, bad_files)
                 c1.parents = [init]
                 if prefix:
-                    c1.tree, ctree = self.merge_tree(init_tree, tree, prefix)
+                    c1.tree, ctree = self.repo.merge_tree(init_tree, tree, prefix)
                 if fix_commit is not None:
                     c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
                 c2 = self.repo.write_commit(c1)
@@ -1120,17 +1158,22 @@ class GitBranch:
         while to_graft:
             idx = to_graft.pop(0)
             if idx not in self.grafts:
-                prefix = graph_prefix[idx] if graph_prefix is not None else None
+                prefix = graph_prefix
+                if isinstance(prefix, dict):
+                    prefix = prefix[idx]
+                if prefix and not isinstance(prefix, set):
+                    raise Exception("bad prefix, must be set or dict of set")
+
                 c1 = graph.commits[idx]
                 ctree = self.repo.get_tree(c1.tree)
-                c1.tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
+                c1.tree, ctree = self.repo.clean_tree(c1.tree, ctree, bad_files)
 
                 c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
 
                 if prefix:
                     max_parent = max(graph.parents[idx], key=graph.linear_parent.get)
                     max_tree = self.grafts[max_parent].tree
-                    c1.tree, ctree = self.merge_tree(max_tree, c1.tree, prefix)
+                    c1.tree, ctree = self.repo.merge_tree(max_tree, c1.tree, prefix)
 
                 if fix_commit is not None:
                     c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
@@ -1174,58 +1217,49 @@ class GitBranch:
         # init_graph.clone().add_graph_fragment(fragment, name=None, new_head=fragment.head)
         return fragment
 
-# xxx - put parent count back, it's actually expensive to alculate
 #
+# xxx - GitBranch
 #
-#       named_heads into merge, and then merge_names=["a"] means they don't get prefixed, and combined
-# xxx   interweave returns a prefix like map of idx to set
-#       or a branch contains prefixes 
-#
-# xxx
-#       alt: GitBranch has a head, a tail, a linear history and a linear_parent
-#            and contains a Graph
+#       has
+#           a name, a head, a tail, 
+#           named heads
+#           a linear history and a linear_parent
+#           and contains a Graph
 #       
-#       writer takes an init argument and default arguments for graft()
-#       shallow merge should be a Graph.shallow_merge(graphs) and then graft() 
-#       get rid of linear parent inside graph???
-#       
+#       branch.new_head()
+#       branch.new_tail(tail, head)
 #
-## xxx - weave builds up a graph
-#       repo.Writer(graph)
-#       repo.init_commit() returns a graph
-#
-#       weave calls graph.union(graph) on all
-#       graft calls graft.add(commit) on all
-#       
-#       graph.add_fragment(... new_head=...)
-#       graph.new_head()
-#       graph.new_tail(tail, head)
-#
-#
-# xxx - GitGraph
-#       graph.walk_forwards graph walk_backwards
-#       graph.properties = set([monotonic, monotonic-author, monotonic-committer]) 
-#       
-# xxx - GitBranch()
-#       repo.Writer(graph, bad_files=.., fix_message=...)
+#       repo.Branch(graph, bad_files=.., fix_message=...)
 #       writer.new_head(...)
 #
 #       writer.graft(..., replace_trees = {init.tree:empty{}})
 #
-# xxx - GitGraph / GitHistory
 #
-#       something to store linear ? / linear parent is method?
+# xxx  shallow merge
+#       should be GitBranch.shallow_merge() and then a graft?
+#       
 #
-# xxx - GitRepo
-#       get_branch(remote, name)
-#       get_branches("remote name", head="default_branch", include_orphans=False) 
+# xxx - GitGraph
+#       interweave calls graph.union(graph) on all
+#       graft calls graft.add(commit) on all
+#       
+#       graph.walk_forwards graph walk_backwards - out of validate
+#       graph.properties = set([monotonic, monotonic-author, monotonic-committer]) 
+#       
 
+# maybe:  a branch contains prefixes 
+# xxx - maybe clean branches before merging history
+# maybe: interweave writes a branch always, then we graft it
+# maybe we clean branches, interweave with prefix, and then graft
+# maybe interweave creates a branch, merges the graph, and then calls graft
 
 # xxx - Processor()
 #       fold mkrepo.py up into more general class
 #
 # xxx - preserving old commit names in headers / changes
-
+#
+# xxx - named_heads to interweave can take named_heads and not just commits
+#
 # xxx - general idea of finer grained merges, file based or subdirectory based
 #
 #       non linear parents? i.e i tag each tail with which repo it comes from
@@ -1235,7 +1269,6 @@ class GitBranch:
 #       i.e. non_linear_depth[x] = {project:n, project:n}
 #       build by walk up from roots, and store a dict of the last 'linear' version of a subtree was
 #             
-
+#
 # xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
 
-# xxx - maybe clean branches before merging history
