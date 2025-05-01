@@ -34,17 +34,6 @@ def glob_match(pattern, string):
     return rx.match(string) is not None
 
 
-class AuthCallbacks(pygit2.RemoteCallbacks):
-    def credentials(self, url, username_from_url, allowed_types):
-        if allowed_types & pygit2.enums.CredentialType.USERNAME:
-            return pygit2.Username("git")
-        elif allowed_types & pygit2.enums.CredentialType.SSH_KEY:
-            x = os.path.expanduser("~/.ssh/id_ed25519.pub")
-            y = os.path.expanduser("~/.ssh/id_ed25519")
-            return pygit2.Keypair("git",x,y, "")
-        else:
-            return None
-
 @dataclass
 class GitCommit:
     tree: str
@@ -757,6 +746,18 @@ class GitBranch:
         branch.validate()
         return branch, prefix
 
+# used for fetch
+class AuthCallbacks(pygit2.RemoteCallbacks):
+    def credentials(self, url, username_from_url, allowed_types):
+        if allowed_types & pygit2.enums.CredentialType.USERNAME:
+            return pygit2.Username("git")
+        elif allowed_types & pygit2.enums.CredentialType.SSH_KEY:
+            x = os.path.expanduser("~/.ssh/id_ed25519.pub")
+            y = os.path.expanduser("~/.ssh/id_ed25519")
+            return pygit2.Keypair("git",x,y, "")
+        else:
+            return None
+
 
 class GitRepo:
     def __init__(self, repo_dir):
@@ -864,6 +865,53 @@ class GitRepo:
     def get_remote_branch_head(self, rname, name):
         return str(self.git.branches.remote[f"{rname}/{name}"].target)
 
+    def new_branch(self, name, head, graph=None, named_heads=None):
+        graph = graph or self.get_graph(head)
+        named_heads = dict(named_heads) if named_heads else {}
+        named_heads.update(graph.named_heads)
+        return graph.Branch(name, head, named_heads)
+
+
+    def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
+        branch_head = self.get_branch_head(branch_name)
+        branch_graph = self.get_graph(branch_head, replace_parents)
+
+        named_heads = {branch_name: branch_head}
+        branch = graph.Branch(name, head, named_heads)
+        branch.validate()
+
+        return branch
+
+    def get_remote_branch(self, rname, branch_name, include=None, exclude=None, replace_parents=None):
+
+        branch_head = self.get_remote_branch_head(rname, branch_name)
+        branch_graph = self.get_graph(branch_head, replace_parents)
+
+        named_heads = {branch_name: branch_head}
+
+        branch = branch_graph.Branch(name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads)
+
+        if include:
+            all_remote_branches = self.all_remote_branches()
+            remote_branches = all_remote_branches.get(rname,{})
+
+            for name, idx in remote_branches.items():
+                if name == branch_name:
+                    continue
+                if not glob_match(include, name) or glob_match(exclude, name):
+                    continue
+
+                graph = self.get_graph(idx, replace_parents, known=branch_graph.commits)
+                graph.validate()
+
+                if all(f in branch_graph.commits for f in graph.tails):
+                    branch.add_named_fragment(name, idx, graph)
+                else:
+                    pass # orphan branch or new tail commit
+
+        branch.validate()
+        return branch
+
     def get_fragment(self, head):
         init = self.get_commit(head)
         return GitGraph(
@@ -948,53 +996,6 @@ class GitRepo:
             heads = set([head]),
             fragments = set(f for f in tails if f in known),
         )
-
-    def new_branch(self, name, head, graph=None, named_heads=None):
-        graph = graph or self.get_graph(head)
-        named_heads = dict(named_heads) if named_heads else {}
-        named_heads.update(graph.named_heads)
-        return graph.Branch(name, head, named_heads)
-
-
-    def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
-        branch_head = self.get_branch_head(branch_name)
-        branch_graph = self.get_graph(branch_head, replace_parents)
-
-        named_heads = {branch_name: branch_head}
-        branch = graph.Branch(name, head, named_heads)
-        branch.validate()
-
-        return branch
-
-    def get_remote_branch(self, rname, branch_name, include=None, exclude=None, replace_parents=None):
-
-        branch_head = self.get_remote_branch_head(rname, branch_name)
-        branch_graph = self.get_graph(branch_head, replace_parents)
-
-        named_heads = {branch_name: branch_head}
-
-        branch = branch_graph.Branch(name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads)
-
-        if include:
-            all_remote_branches = self.all_remote_branches()
-            remote_branches = all_remote_branches.get(rname,{})
-
-            for name, idx in remote_branches.items():
-                if name == branch_name:
-                    continue
-                if not glob_match(include, name) or glob_match(exclude, name):
-                    continue
-
-                graph = self.get_graph(idx, replace_parents, known=branch_graph.commits)
-                graph.validate()
-
-                if all(f in branch_graph.commits for f in graph.tails):
-                    branch.add_named_fragment(name, idx, graph)
-                else:
-                    pass # orphan branch or new tail commit
-
-        branch.validate()
-        return branch
 
     def get_graph_names(self, graph):
         names = {}
@@ -1247,29 +1248,29 @@ class GitWriter:
         self.named_heads.update({k: self.grafts[v].idx for k,v in branch.named_heads.items()})
         return self.head
 
-###
-#       graph.trees, and write_tree handlign nested Tree{Tree...}} 
-#
-#       maybe graph carries "base_parent" and "prefix" 
-#           so that graft knows which parent to inherit from
-#       or pass in base_parent=lambda idx: base_parent[idx]}
-
 #### todo
 #       graph.child_count
+#       graph.trees, and write_tree handlign nested Tree{Tree...}} 
 #       graph.walk_forwards() graph.walk_backwards() iterators
+#
+#       repo.interweave(branches, bad_files, fix_message) 
+#           calls branch interweave, then calls graft
+#           branch.interweave creates prefixed trees 
+#           ?? writer.graft(..., fix_trees)
+#           repo.rewrite(branch, fix_commit=...)
+#           writer(none).write(...)
 #
 #       branch.new_head()
 #       branch.new_tail(tail, head)
-#       writer.graft(..., replace_trees = {init.tree:empty{}})
 #
 #       repo.clean_branch, repo.prefix_branch, repo.interweave
 #           take and return a new branch, saved
-#       repo.intersect / repo.rewrite(branch, fix_commit=...)
 #
 # xxx - shallow merge is a proper writer and stores grafts
 #       maybe calls branch.interweave_heads(....)
 #
 # xxx - named_heads to interweave can take named_heads and not just commits
+#       as to merge various points
 #
 # xxx - Processor()
 #       fold mkrepo.py up into more general class
@@ -1293,6 +1294,10 @@ class GitWriter:
 #
 #       fix tree allows me to preserve behaviour / push logic into script
 #       so what, it's branch.intersect, and repo.intersect writes the actual commits
+#       maybe graph carries "base_parent" and "prefix" 
+#           so that graft knows which parent to inherit from
+#       or pass in base_parent=lambda idx: base_parent[idx]}
+
 #       
 # xxx - general idea of finer grained merges, file based or subdirectory based
 #
