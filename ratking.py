@@ -72,16 +72,16 @@ class GitTree:
 @dataclass
 class GitGraph:
     commits: set
-    head: str
-    tail: str
     tails: set
     heads: set
-    named_heads: set
     parents: dict
     parent_count: dict
     children: dict
     fragments: set 
 
+    named_heads: set
+    head: str
+    tail: str
     linear: dict
     linear_parent: dict
 
@@ -101,7 +101,7 @@ class GitGraph:
             fragments = set(self.fragments),
         )
 
-    def add_graph_fragment(self, other):
+    def add_fragment(self, other):
         for idx in other.commits:
             if idx not in self.commits:
                 c = other.commits[idx]
@@ -150,7 +150,7 @@ class GitGraph:
         if missing:
             raise Exception("what")
 
-        new_linear_parent2 = GitGraph.make_linear_parent(self.linear, self.tails, self.children)
+        new_linear_parent2 = GitBranch.make_linear_parent(self.linear, self.tails, self.children)
         if new_linear_parent != new_linear_parent2:
             for k, v in new_linear_parent.items():
                 v2 = new_linear_parent2[k]
@@ -243,7 +243,7 @@ class GitGraph:
         if history != self.linear:
             raise Exception("time travel")
 
-        linear_parent = GitGraph.make_linear_parent(self.linear, self.tails, self.children)
+        linear_parent = GitBranch.make_linear_parent(self.linear, self.tails, self.children)
 
         if linear_parent != self.linear_parent:
             print("extra keys",set(linear_parent) - set(self.linear_parent))
@@ -389,6 +389,102 @@ class GitGraph:
             raise Exception("welp")
 
 
+    @classmethod
+    def union(cls, graphs):
+        all_commits = {}
+        all_tails = set()
+        all_heads = set()
+        all_children = {}
+        all_parents = {}
+        all_linear = list()
+        all_named_heads = {}
+        all_fragments = set()
+        all_parent_count = dict()
+        all_fragments = set()
+
+        for name, graph in graphs.items():
+            for idx, c in graph.commits.items():
+                if idx in graph.fragments: # skip fake commit
+                    if idx not in all_commits:
+                        all_fragments.add(idx)
+                    continue
+
+                if idx in all_fragments:
+                    all_fragments.remove(idx)
+
+                if idx not in all_commits:
+                    all_commits[idx] = c
+                    all_parents[idx] = graph.parents[idx]
+                    all_parent_count[idx] = graph.parent_count[idx]
+
+                else:
+                    o = all_commits[idx]
+                    if c != o:
+                        raise Exception("dupe??")
+                    if all_parents[idx] != graph.parents[idx]:
+                        raise Exception("dupe??")
+
+                if idx not in all_children:
+                    all_children[idx] = set()
+
+                if graph.children[idx]:
+                    all_children[idx].update(graph.children[idx])
+                    if idx in all_heads:
+                        all_heads.remove(idx)
+
+            all_tails.update(f for f in graph.tails if f not in graph.fragments)
+            all_heads.update(t for t in graph.heads if not all_children[t])
+
+        return cls(
+            commits = all_commits,
+            tails = all_tails,
+            heads = all_heads,
+            children = all_children,
+            parents = all_parents,
+            parent_count = all_parent_count,
+            named_heads = all_named_heads,
+            fragments = all_fragments,
+        )
+
+
+
+@dataclass
+class GitBranch:
+    name: str
+    head: str
+    graph: object
+    named_heads: str
+
+    def validate(self):
+        self.graph.validate()
+
+        # all named heads exist
+        # head, tail exist
+
+        # linear path is valid
+
+    @classmethod
+    def common_ancestor(self, left, right):
+        left, right = left.graph, right.graph
+
+        before, after = None, None
+        for x, y in zip(left.linear, right.linear):
+            if x != y:
+                after = y
+                break
+
+            if left.children[x] != right.children[y]:
+                after = y
+                break
+
+            before = x
+            # XXX: skip consolidating, as more branch history
+        return before, after
+
+    def add_named_fragment(self, name, fragment): 
+        self.graph.add_fragment(fragment)
+        self.named_heads[name] = fragment.head
+
     @staticmethod
     def make_linear_parent(history, tails, children):
         linear_parent = {c:n for n,c in enumerate(history,1)}
@@ -414,8 +510,27 @@ class GitGraph:
 
         return linear_parent
 
+
     @classmethod
-    def interweave(cls, graphs, named_heads=None):
+    def interweave(cls, name, branches, named_heads=None):
+
+        graphs = {k:v.graph for k,v in branches.items()}
+
+        merged_graph = cls._interweave(graphs, named_heads=named_heads)
+        merged_graph.validate() # merged
+
+        prefix = {}
+        for name, branch in graphs.items():
+            for c in branch.commits:
+                if c not in prefix:
+                    prefix[c] = set()
+                prefix[c].add(name)
+
+        branch = GitBranch(name, head=merged_graph.head, graph=merged_graph, named_heads=merged_graph.named_heads)
+        return branch, prefix
+
+    @classmethod
+    def _interweave(cls, graphs, named_heads=None):
         all_commits = {}
         all_tails = set()
         all_heads = set()
@@ -546,7 +661,7 @@ class GitGraph:
             prev = idx
             date = new_date
 
-        linear_parent = cls.make_linear_parent(linear, all_tails, all_children)
+        linear_parent = GitBranch.make_linear_parent(linear, all_tails, all_children)
 
         linear_depth = [linear_parent[x] for x in linear]
         if linear_depth != sorted(linear_depth):
@@ -611,7 +726,7 @@ class GitGraph:
 
             all_named_heads[point_name] = merge_point
 
-        return cls(
+        return GitGraph(
             commits = all_commits,
             tails = all_tails,
             heads = all_heads,
@@ -625,50 +740,6 @@ class GitGraph:
             linear_parent = linear_parent,
             fragments = all_fragments,
         )
-
-@dataclass
-class GitBranch:
-    name: str
-    head: str
-    graph: object
-    named_heads: str
-
-    @classmethod
-    def interweave(cls, name, branches, named_heads=None):
-
-        graphs = {k:v.graph for k,v in branches.items()}
-
-        merged_graph = GitGraph.interweave(graphs, named_heads=named_heads)
-        merged_graph.validate() # merged
-
-        prefix = {}
-        for name, branch in graphs.items():
-            for c in branch.commits:
-                if c not in prefix:
-                    prefix[c] = set()
-                prefix[c].add(name)
-
-        branch = GitBranch(name, head=merged_graph.head, graph=merged_graph, named_heads=merged_graph.named_heads)
-        return branch, prefix
-
-    @classmethod
-    def common_ancestor(self, left, right):
-        left, right = left.graph, right.graph
-
-        before, after = None, None
-        for x, y in zip(left.linear, right.linear):
-            if x != y:
-                after = y
-                break
-
-            if left.children[x] != right.children[y]:
-                after = y
-                break
-
-            before = x
-            # XXX: skip consolidating, as more branch history
-        return before, after
-
 
 
 class GitRepo:
@@ -918,7 +989,7 @@ class GitRepo:
 
         # XXX set property
 
-        linear_parent = GitGraph.make_linear_parent(history, tails, children)
+        linear_parent = GitBranch.make_linear_parent(history, tails, children)
 
         if set(commits) != set(linear_parent):
             raise Exception(f'bad {len(commits)} {len(linear_parent)}')
@@ -963,6 +1034,8 @@ class GitRepo:
 
         named_heads = {branch_name: branch_head}
 
+        branch = GitBranch(name=f"{rname}/{branch_name}", head=branch_head, graph=branch_graph, named_heads=named_heads)
+
         if include:
             all_remote_branches = self.all_remote_branches()
             remote_branches = all_remote_branches.get(rname,{})
@@ -977,15 +1050,12 @@ class GitRepo:
                 graph.validate()
 
                 if all(f in branch_graph.commits for f in graph.tails):
-                    branch_graph.add_graph_fragment(graph)
-                    named_heads[name] = graph.head
+                    branch.add_named_fragment(name, graph)
                 else:
                     pass # orphan branch or new tail commit
-            branch_graph.validate()
+            branch.validate()
 
-
-        branch_graph.named_heads.update(named_heads)
-        return GitBranch(name=f"{rname}/{branch_name}", head=branch_head, graph=branch_graph, named_heads=named_heads)
+        return branch
 
     def get_graph_names(self, graph):
         names = {}
@@ -1080,12 +1150,6 @@ class GitWriter:
 
             prev = self.repo.write_commit(c1)
         return prev
-
-    def _graft(self, branch, init_tree, prefix, bad_files, fix_commit):
-        self.graph = self.old_graft(self.graph, init_tree, branch, prefix, bad_files, fix_commit)
-        self.head = self.graph.head
-        self.named_heads.update(self.graph.named_heads)
-        return self
 
     def graft(self, branch, graph_prefix, bad_files, fix_commit):
         init = self.head
@@ -1202,13 +1266,18 @@ class GitWriter:
         return fragment
 
 #
-# xxx - GitBranch
+# xxx - 
+#       move intersect to git branch
+#       graph.union()
+#       - move linear history, named_heads, head, tail to Branch
+#       - graph.Branch(name, head, tail, named_heads)
 #
-#       has
-#           a name, a head, a tail, 
-#           named heads
-#           a linear history and a linear_parent
-#           and contains a Graph
+# xxx - move max parent logic out of graft
+#       ha ha what if graph has tree
+#       can create new root trees ahead of time, if wanted
+#
+#       also, can call back to a function that says "how do i merge these"
+#       using linear parent
 #       
 #       branch.new_head()
 #       branch.new_tail(tail, head)
