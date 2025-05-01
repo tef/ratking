@@ -67,6 +67,7 @@ class GitGraph:
     parents: dict
     parent_count: dict
     children: dict
+    child_count: dict
     fragments: set
 
     def clone(self):
@@ -77,6 +78,7 @@ class GitGraph:
             children = {k:set(v) for k,v in self.children.items()},
             parents = {k:list(v) for k,v in self.parents.items()},
             parent_count = dict(parent_count),
+            child_count = dict(child_count),
             fragments = set(self.fragments),
         )
 
@@ -96,9 +98,11 @@ class GitGraph:
 
             if idx not in self.children:
                 self.children[idx] = set()
+                self.child_count[idx] = 0
 
             for c in other.children[idx]:
                 self.children[idx].add(c)
+                self.child_count[idx] = len(self.children[idx])
 
         for f in other.tails:
             # don't merge in graphs with new init commits
@@ -173,6 +177,8 @@ class GitGraph:
             if self.parent_count[c] != len(self.parents[c]):
                 raise Exception("bad count")
 
+            if self.child_count[c] != len(self.children[c]):
+                raise Exception("bad count")
 
         # walk backwards from heads
 
@@ -287,6 +293,7 @@ class GitGraph:
         all_children = {}
         all_parents = {}
         all_parent_count = dict()
+        all_child_count = dict()
         all_fragments = set()
 
         for name, graph in graphs.items():
@@ -313,9 +320,11 @@ class GitGraph:
 
                 if idx not in all_children:
                     all_children[idx] = set()
+                    all_child_count[idx] = 0
 
                 if graph.children[idx]:
                     all_children[idx].update(graph.children[idx])
+                    all_child_count[idx] = len(all_children[idx])
                     if idx in all_heads:
                         all_heads.remove(idx)
 
@@ -329,6 +338,7 @@ class GitGraph:
             children = all_children,
             parents = all_parents,
             parent_count = all_parent_count,
+            child_count = all_child_count,
             fragments = all_fragments,
         )
 
@@ -644,6 +654,7 @@ class GitBranch:
             merged_graph.parent_count[idx] = len(new_parents)
 
             merged_graph.children[prev].add(idx)
+            merged_graph.child_count[prev] = len(merged_graph.children[prev])
 
             prev = idx
 
@@ -916,16 +927,12 @@ class GitRepo:
         init = self.get_commit(head)
         return GitGraph(
             commits = {head: init},
+            heads = set([head]),
             tails = set([head]),
             children = {head: set()},
             parents =  {head: set()},
             parent_count = {head: 0},
-            head = head,
-            tail = head,
-            heads = set([head]),
-            named_heads = {},
-            linear = [head],
-            linear_parent = {head:1},
+            child_count = {head: 0},
             fragments = set([head]),
         )
 
@@ -943,6 +950,7 @@ class GitRepo:
         children = {}
         parents = {}
         parent_count = {}
+        child_count = {}
 
         old_parents = {}
         search = [head]
@@ -965,11 +973,13 @@ class GitRepo:
 
             if idx not in children:
                 children[idx] = set()
+                child_count[idx] = 0
 
             for pidx in c_parents:
                 if pidx not in children:
                     children[pidx] = set()
                 children[pidx].add(idx)
+                child_count[pidx] = len(children[pidx])
 
                 if pidx not in commits:
                     p = self.get_commit(pidx)
@@ -993,6 +1003,7 @@ class GitRepo:
             children = children,
             parents = parents,
             parent_count = parent_count,
+            child_count = child_count,
             heads = set([head]),
             fragments = set(f for f in tails if f in known),
         )
@@ -1249,8 +1260,8 @@ class GitWriter:
         return self.head
 
 #### todo
-#       graph.child_count
 #       graph.trees, and write_tree handlign nested Tree{Tree...}} 
+#       graph.child_count
 #       graph.walk_forwards() graph.walk_backwards() iterators
 #
 #       repo.interweave(branches, bad_files, fix_message) 
