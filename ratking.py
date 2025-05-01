@@ -1040,10 +1040,10 @@ class GitWriter:
             out = {k:v.idx for k,v in self.grafts.items}
             json.dump(out, fh, sort_keys=True, indent=2)
 
-
-    def shallow_merge(self, graphs, bad_files, fix_commit):
+    def shallow_merge(self, branches, bad_files, fix_commit):
         init = self.head
         heads = []
+        graphs = {k:v.graph for k,v in branches.items()} 
 
         for name, graph in graphs.items():
             head = graph.head
