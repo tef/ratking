@@ -415,23 +415,6 @@ class GitGraph:
         return linear_parent
 
     @classmethod
-    def common_ancestor(self, left, right):
-        before, after = None, None
-        for x, y in zip(left.linear, right.linear):
-            if x != y:
-                after = y
-                break
-
-            if left.children[x] != right.children[y]:
-                after = y
-                break
-
-            before = x
-            # XXX: skip consolidating, as more branch history
-        return before, after
-
-
-    @classmethod
     def interweave(cls, graphs, named_heads=None):
         all_commits = {}
         all_tails = set()
@@ -642,6 +625,50 @@ class GitGraph:
             linear_parent = linear_parent,
             fragments = all_fragments,
         )
+
+@dataclass
+class GitBranch:
+    name: str
+    head: str
+    graph: object
+    named_heads: str
+
+    @classmethod
+    def interweave(cls, name, branches, named_heads=None):
+
+        graphs = {k:v.graph for k,v in branches.items()}
+
+        merged_graph = GitGraph.interweave(graphs, named_heads=named_heads)
+        merged_graph.validate() # merged
+
+        prefix = {}
+        for name, branch in graphs.items():
+            for c in branch.commits:
+                if c not in prefix:
+                    prefix[c] = set()
+                prefix[c].add(name)
+
+        branch = GitBranch(name, head=merged_graph.head, graph=merged_graph, named_heads=merged_graph.named_heads)
+        return branch, prefix
+
+    @classmethod
+    def common_ancestor(self, left, right):
+        left, right = left.graph, right.graph
+
+        before, after = None, None
+        for x, y in zip(left.linear, right.linear):
+            if x != y:
+                after = y
+                break
+
+            if left.children[x] != right.children[y]:
+                after = y
+                break
+
+            before = x
+            # XXX: skip consolidating, as more branch history
+        return before, after
+
 
 
 class GitRepo:
@@ -920,7 +947,7 @@ class GitRepo:
         graph = graph or self.get_graph(head)
         named_heads = dict(named_heads) if named_heads else {}
         named_heads.update(graph.named_heads)
-        return GitBranch(self, head=head, graph=graph, named_heads=named_heads)
+        return GitBranch(name=name, head=head, graph=graph, named_heads=named_heads)
 
 
     def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
@@ -931,7 +958,7 @@ class GitRepo:
 
         branch_graph.named_heads[branch_name] = branch_head
 
-        return GitBranch(self, head=branch_head, graph=branch_graph, named_heads=named_heads)
+        return GitBranch(name=branch_name, head=branch_head, graph=branch_graph, named_heads=named_heads)
 
     def get_remote_branch(self, rname, branch_name, include=None, exclude=None, replace_parents=None):
 
@@ -963,10 +990,7 @@ class GitRepo:
 
 
         branch_graph.named_heads.update(named_heads)
-        return GitBranch(self, head=branch_head, graph=branch_graph, named_heads=named_heads)
-
-    def Branch(self):
-        return GitBranch(self)
+        return GitBranch(name=f"{rname}/{branch_name}", head=branch_head, graph=branch_graph, named_heads=named_heads)
 
     def get_names(self, head):
         names = {}
@@ -987,6 +1011,9 @@ class GitRepo:
                     add_name(i, name.strip())
         return names
 
+    def Writer(self, init, tree=None, named_heads=None):
+        return GitWriter(self, init, tree, named_heads)
+
 
 
 @dataclass
@@ -997,12 +1024,12 @@ class Graft:
     tree: object
 
 
-class GitBranch:
-    def __init__(self, repo, head=None, graph=None, named_heads=None):
+class GitWriter:
+    def __init__(self, repo, head, tree=None, named_heads=None):
         self.repo = repo
-        self.head = None
-        self.graph = graph
-        self.named_heads = named_heads
+        self.head = head
+        self.tree = tree
+        self.named_heads = named_heads if named_heads else {}
         self.grafts = {}
 
     def grafted(self, idx):
@@ -1013,51 +1040,9 @@ class GitBranch:
             out = {k:v.idx for k,v in self.grafts.items}
             json.dump(out, fh, sort_keys=True, indent=2)
 
-    @classmethod
-    def interweave(cls, branches, named_heads=None):
 
-        repos = {b.repo for b in branches.values()}
-
-        if len(repos) != 1:
-            raise Exception("branches must come from same repo")
-
-        repo = repos.pop()
-
-        graphs = {k:v.graph for k,v in branches.items()}
-
-        merged_graph = GitGraph.interweave(graphs, named_heads=named_heads)
-        merged_graph.validate() # merged
-
-        prefix = {}
-        for name, branch in graphs.items():
-            for c in branch.commits:
-                if c not in prefix:
-                    prefix[c] = set()
-                prefix[c].add(name)
-
-        branch = GitBranch(repo, head=merged_graph.head, graph=merged_graph, named_heads=merged_graph.named_heads)
-        return branch, prefix
-
-    @classmethod
-    def common_ancestor(self, left, right):
-        left, right = left.graph, right.graph
-
-        before, after = None, None
-        for x, y in zip(left.linear, right.linear):
-            if x != y:
-                after = y
-                break
-
-            if left.children[x] != right.children[y]:
-                after = y
-                break
-
-            before = x
-            # XXX: skip consolidating, as more branch history
-        return before, after
-
-
-    def shallow_merge(self, init, graphs, bad_files, fix_commit):
+    def shallow_merge(self, graphs, bad_files, fix_commit):
+        init = self.head
         heads = []
 
         for name, graph in graphs.items():
@@ -1102,13 +1087,15 @@ class GitBranch:
             prev = self.repo.write_commit(c1)
         return prev
 
-    def graft(self, branch, init_tree, bad_files, fix_commit):
-        pass
-        
+    def _graft(self, branch, init_tree, prefix, bad_files, fix_commit):
+        self.graph = self.old_graft(self.graph, init_tree, branch, prefix, bad_files, fix_commit)
+        self.head = self.graph.head
+        self.named_heads.update(self.graph.named_heads)
+        return self
 
-    
-    def old_graft(self, init_graph, init_tree, branch, graph_prefix, bad_files, fix_commit):
-        init = init_graph.head
+    def graft(self, branch, graph_prefix, bad_files, fix_commit):
+        init = self.head
+        init_tree = self.tree
         graph = branch.graph
         count = dict(graph.parent_count)
         to_graft = []
@@ -1214,11 +1201,10 @@ class GitBranch:
             if x not in self.grafts:
                 raise Exception("missing")
     
-        fragment = self.repo.get_graph(self.grafts[graph.head].idx) #, known=init_graph.commits)
-        fragment.named_heads = dict(init_graph.named_heads)
-        fragment.named_heads.update({k: self.grafts[v].idx for k,v in graph.named_heads.items()})
-        fragment.fragments = set([init])
-        # init_graph.clone().add_graph_fragment(fragment, name=None, new_head=fragment.head)
+        self.head = self.grafts[graph.head].idx
+        self.named_heads.update({k: self.grafts[v].idx for k,v in graph.named_heads.items()})
+        return self.head
+
         return fragment
 
 #
