@@ -82,6 +82,32 @@ class GitGraph:
             fragments = set(self.fragments),
         )
 
+    def walk_tails(self):
+        search = list(self.tails)
+        counts = dict(self.parent_count)
+
+        while search:
+            c = search.pop(0)
+            yield c
+
+            for i in self.children[c]:
+                counts[i] -= 1
+                if counts[i] == 0:
+                    search.append(i)
+
+    def walk_heads(self):
+        search = list(self.heads)
+        counts = dict(self.child_count)
+
+        while search:
+            c = search.pop(0)
+            yield c
+
+            for i in self.parents[c]:
+                counts[i] -= 1
+                if counts[i] == 0:
+                    search.append(i)
+
     def add_fragment(self, other):
         for idx in other.commits:
             if idx not in self.commits:
@@ -183,18 +209,11 @@ class GitGraph:
         # walk backwards from heads
 
         found_tails = set()
-        walked = set(self.heads)
-        search = list(walked)
+        walked = set()
 
-        while search:
-            c = search.pop(0)
-            graph_parents = self.parents[c]
-            if graph_parents:
-                for p in graph_parents:
-                    if p not in walked:
-                        walked.add(p)
-                        search.append(p)
-            else:
+        for c in self.walk_heads():
+            walked.add(c)
+            if not self.parents[c]:
                 found_tails.add(c)
 
         if found_tails != self.tails:
@@ -203,23 +222,15 @@ class GitGraph:
         if walked != set(self.commits):
             raise Exception("missing commits")
 
-
         # walk forward from talks
         # validate complete walk through children
 
-        search = list(self.tails)
-        walked = set(self.tails)
+        walked = set()
         heads = set()
 
-        while search:
-            i = search.pop(0)
-
-            if self.children[i]:
-                for c in self.children[i]:
-                    if c not in walked:
-                        walked.add(c)
-                        search.append(c)
-            else:
+        for i in self.walk_tails():
+            walked.add(i)
+            if not self.children[i]:
                 heads.add(i)
 
         if heads != self.heads:
@@ -230,58 +241,6 @@ class GitGraph:
 
         if walked != set(self.commits):
             print("commits", len(self.commits), "walked", len(walked))
-            raise Exception("missing commits")
-
-
-        # validate walk through counts
-
-        for f in self.tails:
-            if self.parents[f]:
-                raise Exception("bad")
-
-        walked = set(self.tails)
-        search = list(self.tails)
-        counts = dict(self.parent_count)
-        heads = set()
-
-        while search:
-            i = search.pop(0)
-
-            if counts[i] != 0:
-                raise Exception("bad")
-
-            if self.children[i]:
-                for c in self.children[i]:
-                    if counts[c] <= 0:
-                        raise Exception("bad")
-
-                    counts[c] -= 1
-                    if counts[c] == 0:
-                        if c not in walked:
-                            walked.add(c)
-                            search.append(c)
-                        else:
-                            raise Exception("what")
-            else:
-                heads.add(i)
-
-        if not heads:
-            missing = [x for x in self.commits if x not in walked and counts[x] != self.parent_count[x]]
-            print("never walked", len(self.commits)-len(walked))
-            print("almost walked", len(missing))
-            for m in missing:
-                print("missing", m)
-            print("total", len(self.commits))
-
-            raise Exception("exited early")
-
-        if heads != self.heads:
-            print(heads, self.heads)
-            raise Exception("bad head")
-
-        if walked != set(self.commits):
-            print(heads, head)
-            print(len(walked), len(self.commits), len(self.tails))
             raise Exception("missing commits")
 
 
@@ -659,6 +618,8 @@ class GitBranch:
             prev = idx
 
         merged_graph.heads = {l for l in merged_graph.heads if not merged_graph.children[l]}
+
+        merged_graph.validate()
 
         # validate rewrite
 
@@ -1261,8 +1222,6 @@ class GitWriter:
 
 #### todo
 #       graph.trees, and write_tree handlign nested Tree{Tree...}} 
-#       graph.child_count
-#       graph.walk_forwards() graph.walk_backwards() iterators
 #
 #       repo.interweave(branches, bad_files, fix_message) 
 #           calls branch interweave, then calls graft
