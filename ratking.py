@@ -992,9 +992,39 @@ class GitRepo:
                     add_name(i, name.strip())
         return names
 
+    def clean_tree(self, addr, old_tree, bad_files):
+        entries = []
+        dropped = False
+        for i in old_tree.entries:
+            name = i[1]
+            bad = bad_files.get(name, None)
+            if bad is None:
+                entries.append(i)
+            elif callable(bad):
+                out = bad(i[0],i[1],i[2])
+                if out:
+                    entries.append(out)
+                    if out != i:
+                        dropped=True
+                else:
+                    dropped=True
+            elif isinstance(bad, dict):
+                sub_tree = self.get_tree(i[2])
+                new_addr, tree_obj = self.clean_tree(i[2], sub_tree, bad)
+                if new_addr != i[2]:
+                    entries.append((i[0], i[1], new_addr))
+                    dropped = True
+            else:
+                dropped = True
+                pass # delete it, if it's an empty hash
+        if not dropped:
+            return addr, old_tree
+        new_tree = GitTree(entries)
+        return self.write_tree(new_tree), new_tree
 
-    def clean_branches(self, branch, bad_files):
-        writer = GitWriter(repo, None)
+
+    def clean_branch(self, branch, bad_files):
+        writer = GitWriter(self, None)
 
         def fix_tree(idx, tree, ctree):
             tree, ctree = self.clean_tree(tree, ctree, bad_files)
@@ -1047,36 +1077,6 @@ class GitWriter:
         graph = self.repo.get_graph(self.head)
         return graph.Branch(name, self.head, self.named_heads)
 
-    def clean_tree(self, addr, old_tree, bad_files):
-        entries = []
-        dropped = False
-        for i in old_tree.entries:
-            name = i[1]
-            bad = bad_files.get(name, None)
-            if bad is None:
-                entries.append(i)
-            elif callable(bad):
-                out = bad(i[0],i[1],i[2])
-                if out:
-                    entries.append(out)
-                    if out != i:
-                        dropped=True
-                else:
-                    dropped=True
-            elif isinstance(bad, dict):
-                sub_tree = self.repo.get_tree(i[2])
-                new_addr, tree_obj = self.clean_tree(i[2], sub_tree, bad)
-                if new_addr != i[2]:
-                    entries.append((i[0], i[1], new_addr))
-                    dropped = True
-            else:
-                dropped = True
-                pass # delete it, if it's an empty hash
-        if not dropped:
-            return addr, old_tree
-        new_tree = GitTree(entries)
-        return self.repo.write_tree(new_tree), new_tree
-
     def prefix_tree(self, tree, prefix):
         entries = []
         for p in prefix:
@@ -1109,7 +1109,7 @@ class GitWriter:
         prev = init
         for head, commit, prefix in heads:
             old_tree = self.repo.get_tree(commit.tree)
-            tree_idx, tree = self.clean_tree(commit.tree, old_tree, bad_files)
+            tree_idx, tree = self.repo.clean_tree(commit.tree, old_tree, bad_files)
 
             entries = [e for e in entries if e[1] not in prefix]
 
@@ -1150,7 +1150,7 @@ class GitWriter:
             if prefix and not isinstance(prefix, set):
                 raise Exception("bad prefix, must be set or dict of set")
 
-            tree, ctree = self.clean_tree(tree, ctree, bad_files)
+            tree, ctree = self.repo.clean_tree(tree, ctree, bad_files)
 
             if idx in graph.tails:
                 tree, ctree = self.merge_tree(start_tree, tree, prefix)
@@ -1172,15 +1172,13 @@ class GitWriter:
         return self.graft(branch, prefix_tree, prefix_commit)
 
     def graft(self, branch, fix_tree, fix_commit):
-        start_parents = [self.head] if self.head else None
+        start_parents = [self.head] if self.head else []
 
         graph = branch.graph
         new_heads = {}
 
         graph_total = len(graph.commits)
-        total = len(branch.linear)
         graph_count = 0
-        depth = 0
 
 
         for idx in graph.walk_tails():
@@ -1217,9 +1215,7 @@ class GitWriter:
             if not graph.children[idx]:
                 new_heads[idx] = c2
 
-            c_depth = branch.linear_parent[idx]
-            if c_depth > depth:
-                depth = c_depth
+            if graph_count & 256 == 0:
                 per = graph_count/graph_total
                 print(f"\r    progress {per:.2%} {graph_count} of {graph_total}", end="")
 
