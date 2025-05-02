@@ -123,7 +123,7 @@ class GitGraph:
             fragments = set(self.fragments),
         )
 
-    def walk_tails(self):
+    def walk_children(self):
         search = list(self.tails)
         counts = dict(self.parent_count)
 
@@ -136,7 +136,7 @@ class GitGraph:
                 if counts[i] == 0:
                     search.append(i)
 
-    def walk_heads(self):
+    def walk_parents(self):
         search = list(self.heads)
         counts = dict(self.child_count)
 
@@ -172,8 +172,9 @@ class GitGraph:
                 self.child_count[idx] = len(self.children[idx])
 
         for f in other.tails:
-            # don't merge in graphs with new init commits
-            # XXX we could allow this? but for now it may prevent bugs
+            # xxx don't merge in graphs with new init commits
+            # xxx we could allow this? but for now it may prevent bugs
+
             if not self.parents[f] and f not in self.tails:
                 raise Exception("error")
 
@@ -252,7 +253,7 @@ class GitGraph:
         found_tails = set()
         walked = set()
 
-        for c in self.walk_heads():
+        for c in self.walk_parents():
             walked.add(c)
             if not self.parents[c]:
                 found_tails.add(c)
@@ -269,7 +270,7 @@ class GitGraph:
         walked = set()
         heads = set()
 
-        for i in self.walk_tails():
+        for i in self.walk_children():
             walked.add(i)
             if not self.children[i]:
                 heads.add(i)
@@ -414,7 +415,6 @@ class GitBranch:
                 break
 
             before = x
-            # XXX: skip consolidating, as more branch history
         return before, after
 
 
@@ -624,7 +624,8 @@ class GitBranch:
             for c in graph.commits:
                 if branch_linear_parent[name][c] == 0:
                     if linear_parent[c] != 0:
-                        # XXX - we exclude extra tails and shouldn't fold them in
+                        # xxx - we exclude extra tails and shouldn't fold them in
+                        # xxx - and we error elsewhere about it
                         raise Exception("bad")
                 lp = branch_linear_parent[name][c]
                 lp_idx = branch_history[name][lp-1]
@@ -1183,7 +1184,7 @@ class GitWriter:
             json.dump(out, fh, sort_keys=True, indent=2)
 
     def to_branch(self, name):
-        # XXX BUILD A GRAPH
+        # XXX -  BUILD A GRAPH
         graph = self.repo.get_graph(self.head)
         for k,v in self.named_heads.items():
             fragment = self.repo.get_graph(v, known=graph.commits)
@@ -1227,7 +1228,7 @@ class GitWriter:
         graph_count = 0
 
 
-        for idx in graph.walk_tails():
+        for idx in graph.walk_children():
             if idx not in self.grafts:
                 if idx in graph.fragments:
                     raise Exception("fragment missing")
@@ -1284,9 +1285,6 @@ class GitWriter:
 # xxx - Writer
 #       writer should be BranchWriter
 #       should build and return a graph, now there's no recalculation
-#
-#       
-#
 #
 # xxx - interweave
 #       move named heads to repo_interweave
