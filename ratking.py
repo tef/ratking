@@ -505,32 +505,9 @@ class GitBranch:
 
         return linear_parent
 
-
     @classmethod
-    def interweave(cls, name, branches, named_heads=None):
-        if named_heads is None:
-            named_heads = {}
-
-        graphs = {k:v.graph for k,v in branches.items()}
-        merged_graph = GitGraph.union(graphs)
-
-        branch_heads = set()
-        branch_tails = set()
-        all_linear = list()
-        all_named_heads = {}
-
-        for name, branch in branches.items():
-            all_linear.append(list(branch.linear))
-
-            branch_heads.add(branch.head)
-            branch_tails.add(branch.tail)
-
-            for k, v in branch.named_heads.items():
-                all_named_heads[f"{name}/{k}"] = v
-
-        # create a new linear history
-
-        history = [list(h) for h in all_linear]
+    def merge_history(self, all_history, merged_graph):
+        history = [list(h) for h in all_history]
         new_history = []
 
         while history:
@@ -549,14 +526,13 @@ class GitBranch:
                 history = [h for h in history if h]
 
         new_history.reverse()
-        linear = new_history
 
         # validate new history
 
         seen = set()
         new_history2 = []
 
-        for h in all_linear:
+        for h in all_history:
             new_history2.extend(x for x in h if x not in seen)
             seen.update(h)
 
@@ -565,15 +541,7 @@ class GitBranch:
         if new_history != new_history2:
             raise Exception("welp")
 
-
-        head = linear[-1]
-        tail = linear[0]
-
-        if head not in branch_heads:
-            raise Exception("bad")
-        if tail not in branch_tails:
-            # should be one of the .tail of the graphs
-            raise Exception("worse")
+        tail = new_history[0]
 
         if tail not in merged_graph.tails:
             raise Exception("bad")
@@ -582,18 +550,43 @@ class GitBranch:
         if merged_graph.parents[tail]:
             raise Exception("bad")
 
+        return new_history
+
+    @classmethod
+    def interweave(cls, name, branches, named_heads=None):
+        if named_heads is None:
+            named_heads = {}
+
+        graphs = {k:v.graph for k,v in branches.items()}
+        merged_graph = GitGraph.union(graphs)
+
+        branch_heads = set()
+        branch_tails = set()
+        all_linear = list()
+        all_named_heads = {}
+
+        for name, branch in branches.items():
+            all_linear.append(list(branch.linear))
+            branch_heads.add(branch.head)
+            branch_tails.add(branch.tail)
+
+            for k, v in branch.named_heads.items():
+                all_named_heads[f"{name}/{k}"] = v
+
+        # create a new linear history
+        linear = cls.merge_history(all_linear, merged_graph)
+
+        head, tail = linear[-1], linear[0]
+
+        if head not in branch_heads or tail not in branch_tails:
+            raise Exception("bad history")
+
         # rewrite the parents
+        # note: could remove original linear parent, and not create a merge commit
 
         prev = tail
-
         for idx in linear[1:]:
             old_parents = merged_graph.commits[idx].parents
-            if idx in merged_graph.tails:
-                merged_graph.tails.remove(idx)
-
-            # XXX - could remove original linear parent
-            #       and not create a merge commit
-
             new_parents = [prev] + [o for o in old_parents if o != prev]
 
             merged_graph.parents[idx] = list(new_parents)
@@ -603,9 +596,12 @@ class GitBranch:
             merged_graph.children[prev].add(idx)
             merged_graph.child_count[prev] = len(merged_graph.children[prev])
 
-            prev = idx
+            if idx in merged_graph.tails:
+                merged_graph.tails.remove(idx)
+            if idx != head and idx in merged_graph.heads:
+                merged_graph.heads.remove(idx)
 
-        merged_graph.heads = {l for l in merged_graph.heads if not merged_graph.children[l]}
+            prev = idx
 
         merged_graph.validate()
 
@@ -629,7 +625,10 @@ class GitBranch:
 
         linear_parent = GitBranch.make_linear_parent(linear, merged_graph.tails, merged_graph.children)
 
+        # validate linear parents
+
         linear_depth = [linear_parent[x] for x in linear]
+
         if linear_depth != sorted(linear_depth):
             raise Exception("bad linear depth")
 
@@ -643,16 +642,13 @@ class GitBranch:
                     print(m, "not found in linear history")
             raise Exception(f'bad {len(merged_graph.commits)} {len(linear_parent)}')
 
-
-        # for each source branch
-        #    find new linear history for each point, and that it always goes up
-        #    for each commit, check it has the new value
+        # ensure linear ordering of source branches is preserved in merged branch
 
         for name, branch in branches.items():
             graph = branch.graph
             history_depth = [linear_parent[x] for x in branch.linear]
             if history_depth != sorted(history_depth):
-                raise Exception("history not preserved")
+                raise Exception("branch history not preserved")
             for c in graph.commits:
                 if branch.linear_parent[c] == 0:
                     if linear_parent[c] != 0:
@@ -664,8 +660,9 @@ class GitBranch:
                 if nlp != linear_parent[c]:
                     raise Exception("bad")
 
-        # find all merge points passed in
-        # { "name of commit" : {"upstream":"commit"}}
+        # create the merged branch
+
+        # find all merge points passed in, passed { "name of commit" : {"upstream name":"commit id"}}
 
         for point_name, merge_points in named_heads.items():
 
@@ -685,6 +682,8 @@ class GitBranch:
                         raise Exception("can't make merge point")
 
             all_named_heads[point_name] = merge_point
+
+        # create map of commit prefixes
 
         prefix = {}
         for name, branch in graphs.items():
@@ -993,6 +992,28 @@ class GitRepo:
                     add_name(i, name.strip())
         return names
 
+
+    def clean_branches(self, branch, bad_files):
+        writer = GitWriter(repo, None)
+
+        def fix_tree(idx, tree, ctree):
+            tree, ctree = self.clean_tree(tree, ctree, bad_files)
+            return tree, ctree
+
+        writer.graft(branch, fix_tree=fix_tree, fix_commit=None)
+
+        return writer.to_branch(branch.name)
+
+    def interweave_branches(self, name, branches, named_heads=None, fix_commit=None, bad_files=None):
+        branch, prefix = GitBranch.interweave(name, branches, named_heads=named_heads)
+
+        # XXX
+        # writer= self.Writer(None)
+        # writer.graft_prefix()
+
+        return branch, prefix
+
+
     def Writer(self, init, tree=None, named_heads=None):
         return GitWriter(self, init, tree, named_heads)
 
@@ -1021,6 +1042,10 @@ class GitWriter:
         with open(path, "w+") as fh:
             out = {k:v.idx for k,v in self.grafts.items}
             json.dump(out, fh, sort_keys=True, indent=2)
+
+    def to_branch(self, name):
+        graph = self.repo.get_graph(self.head)
+        return graph.Branch(name, self.head, self.named_heads)
 
     def clean_tree(self, addr, old_tree, bad_files):
         entries = []
@@ -1114,17 +1139,47 @@ class GitWriter:
             prev = self.repo.write_commit(c1)
         return prev
 
-    def graft(self, branch, graph_prefix, bad_files, fix_commit):
-        init = self.head
-        init_tree = self.tree
+    def graft_prefix(self, branch, graph_prefix, bad_files, fix_commit):
+        start_tree = self.tree if self.tree else GitTree([])
         graph = branch.graph
 
-        graph_total = len(graph.commits)
-        graph_count = 0
+        def prefix_tree(idx, tree, ctree):
+            prefix = graph_prefix
+            if isinstance(prefix, dict):
+                prefix = prefix[idx]
+            if prefix and not isinstance(prefix, set):
+                raise Exception("bad prefix, must be set or dict of set")
 
+            tree, ctree = self.clean_tree(tree, ctree, bad_files)
+
+            if idx in graph.tails:
+                tree, ctree = self.merge_tree(start_tree, tree, prefix)
+            else:
+                max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
+                max_tree = self.grafts[max_parent].tree
+                tree, ctree = self.merge_tree(max_tree, tree, prefix)
+
+            return tree, ctree
+
+        def prefix_commit(idx, commit):
+            prefix = graph_prefix
+            if isinstance(prefix, dict):
+                prefix = prefix[idx]
+            if prefix and not isinstance(prefix, set):
+                raise Exception("bad prefix, must be set or dict of set")
+            return fix_commit(commit, ", ".join(sorted(prefix)))
+
+        return self.graft(branch, prefix_tree, prefix_commit)
+
+    def graft(self, branch, fix_tree, fix_commit):
+        start_parents = [self.head] if self.head else None
+
+        graph = branch.graph
         new_heads = {}
 
+        graph_total = len(graph.commits)
         total = len(branch.linear)
+        graph_count = 0
         depth = 0
 
 
@@ -1133,31 +1188,20 @@ class GitWriter:
                 if idx in graph.fragments:
                     raise Exception("fragment missing")
 
-                prefix = graph_prefix
-                if isinstance(prefix, dict):
-                    prefix = prefix[idx]
-                if prefix and not isinstance(prefix, set):
-                    raise Exception("bad prefix, must be set or dict of set")
 
                 c1 = graph.commits[idx]
                 ctree = self.repo.get_tree(c1.tree)
-                c1.tree, ctree = self.clean_tree(c1.tree, ctree, bad_files)
 
                 if idx in graph.tails:
-                    c1.parents = [init]
-
-                    if prefix:
-                        c1.tree, ctree = self.merge_tree(init_tree, c1.tree, prefix)
+                    c1.parents = start_parents
                 else:
                     c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
-
-                    if prefix:
-                        max_parent = max(graph.parents[idx], key=branch.linear_parent.get)
-                        max_tree = self.grafts[max_parent].tree
-                        c1.tree, ctree = self.merge_tree(max_tree, c1.tree, prefix)
+                
+                if fix_tree is not None:
+                    c1.tree, ctree = fix_tree(idx, c1.tree, ctree)
 
                 if fix_commit is not None:
-                    c1.author, c1.committer, c1.message = fix_commit(c1,  ", ".join(sorted(prefix)))
+                    c1.author, c1.committer, c1.message = fix_commit(idx, c1)
 
                 c2 = self.repo.write_commit(c1)
                 self.grafts[idx] = Graft(c2, c1, c1.tree, ctree)
@@ -1190,9 +1234,19 @@ class GitWriter:
         self.named_heads.update({k: self.grafts[v].idx for k,v in branch.named_heads.items()})
         return self.head
 
-#### todo
-#       git branch combine linear histories
+####
+#   xxx: moving merge tree logic out of graft and into interweave
+#   - does interweave return a written branch, or a branch with mutated commits and trees
+#  
 #
+#
+#
+
+
+
+#### todo
+#       repo.clean_branch(branch, bad_files)      
+#       
 #       repo.interweave(branches, bad_files, fix_message) 
 #           calls branch interweave, then calls graft
 #           branch.interweave creates prefixed trees 
@@ -1205,6 +1259,8 @@ class GitWriter:
 #
 #       repo.clean_branch, repo.prefix_branch, repo.interweave
 #           take and return a new branch, saved
+#       
+#       clean_tree/prefix take and return GitTree??
 #
 # xxx - shallow merge is a proper writer and stores grafts
 #       maybe calls branch.interweave_heads(....)
