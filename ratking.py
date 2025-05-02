@@ -1141,7 +1141,7 @@ class GitRepo:
         writer.graft(merged_branch, fix_tree=prefix_tree, fix_commit=prefix_commit)
 
         new_branch = writer.to_branch(name)
-        return merged_branch
+        return new_branch
 
 
     def Writer(self):

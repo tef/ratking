@@ -1,2 +1,2 @@
 #!/bin/bash
-GIT_DIR=`pwd`/monorepo exec git "$@"
+GIT_DIR=`pwd`/monorepo.git exec git "$@"
