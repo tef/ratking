@@ -335,8 +335,6 @@ class GitGraph:
             head = head,
             graph = self,
             tail = history[0],
-            linear = history,
-            linear_parent = linear_parent,
             named_heads = named_heads,
         )
 
@@ -349,8 +347,6 @@ class GitBranch:
     graph: object
     named_heads: dict
     tail: str
-    linear: dict
-    linear_parent: dict
 
     def clone(self):
         return GitBranch(
@@ -359,8 +355,6 @@ class GitBranch:
             graph = graph.clone(),
             tail = str(self.tail),
             named_heads = dict(self.named_heads),
-            linear = list(self.linear),
-            linear_parent = dict(self.linear_parent),
         )
 
     def common_ancestor(self, other):
@@ -405,83 +399,9 @@ class GitBranch:
             raise Exception("how")
 
 
-        # XXX
-
-        if history != self.linear:
-            raise Exception("wrong linear")
-
-        history.sort(key=lambda idx: self.graph.commits[idx].max_date)
-
-        if history != self.linear:
-            raise Exception("time travel")
-
-        linear_parent = GitBranch.make_linear_parent(self.linear, graph.tails, graph.children)
-
-        if linear_parent != self.linear_parent:
-            print("extra keys",set(linear_parent) - set(self.linear_parent))
-            print("missing keys",set(self.linear_parent) - set(linear_parent))
-
-            raise Exception("missing linear parent")
-
-        # validate linear_depth through counts
-
-        linear_depth = {f: self.linear_parent[f] for f in self.linear}
-        linear_depth.update({f: self.linear_parent[f] for f in graph.tails})
-
-        for i in graph.walk_tails():
-            if i not in linear_depth:
-                linear_depth[i] = max(linear_depth[p] for p in graph.parents[i])
-
-        if linear_depth != self.linear_parent:
-            print(len(linear_depth), len(self.linear_parent))
-            for x,y in linear_depth.items():
-                if self.linear_parent[x] != y:
-                    print(x, y, self.linear_parent[x])
-            raise Exception("welp")
-
     def add_named_fragment(self, name, head, other):
         graph = self.graph
         graph.add_fragment(other)
-
-        start = [(self.linear_parent.get(x), x) for x in other.tails]
-        start.sort(reverse=True, key=lambda x: x[0])
-
-        new_linear_parent = dict(self.linear_parent)
-
-        for n, idx in start:
-            search = []
-            search.extend(c for c in graph.children[idx] if c not in new_linear_parent)
-            while search:
-                top = search.pop(0)
-                if top not in new_linear_parent:
-                    new_linear_parent[top] = n
-                    search.extend(c for c in graph.children[top] if c not in new_linear_parent)
-
-        self.linear_parent = new_linear_parent
-        self.named_heads[name] = head
-
-        ## validation
-
-        missing = set(graph.commits) - set(new_linear_parent)
-
-        if missing:
-            raise Exception("what")
-
-        ## extra check
-
-        new_linear_parent2 = GitBranch.make_linear_parent(self.linear, graph.tails, graph.children)
-        if new_linear_parent != new_linear_parent2:
-            for k, v in new_linear_parent.items():
-                v2 = new_linear_parent2[k]
-                if v != v2:
-                    print(v,v2)
-            raise Exception("no")
-
-        for k, v in self.linear_parent.items():
-            if new_linear_parent[k] != v:
-                raise Exception("error")
-            if new_linear_parent2[k] != v:
-                raise Exception("error")
 
 
     @staticmethod
@@ -718,8 +638,6 @@ class GitBranch:
                 graph = merged_graph,
                 head = head,
                 tail = tail,
-                linear = history,
-                linear_parent = linear_parent,
                 named_heads=all_named_heads
         )
 
