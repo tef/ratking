@@ -204,7 +204,7 @@ class GitGraph:
             self.child_count[pidx] = len(self.children[pidx])
 
 
-    def add_fragment(self, other):
+    def add_graph(self, other):
         for idx in other.commits:
             if idx not in self.commits or idx in self.fragments:
                 c = other.commits[idx]
@@ -215,7 +215,11 @@ class GitGraph:
                     self.fragments.remove(idx)
             else:
                 if idx not in other.fragments:
-                    raise Exception("nope")
+                    if self.commits[idx] != other.commits[idx]:
+                        raise Exception("nope")
+                    if self.parents[idx] != other.parents[idx]:
+                        raise Exception("nope")
+                    continue
 
                 if idx not in self.children:
                     self.children[idx] = set()
@@ -242,60 +246,10 @@ class GitGraph:
     def union(cls, graphs):
         all_graphs = cls.new()
 
-        all_commits = {}
-        all_tails = set()
-        all_heads = set()
-        all_children = {}
-        all_parents = {}
-        all_parent_count = dict()
-        all_child_count = dict()
-        all_fragments = set()
-
         for name, graph in graphs.items():
-            for idx, c in graph.commits.items():
-                if idx in graph.fragments: # skip fake commit
-                    if idx not in all_commits:
-                        all_fragments.add(idx)
-                    continue
+            all_graphs.add_graph(graph)
 
-                if idx in all_fragments:
-                    all_fragments.remove(idx)
-
-                if idx not in all_commits:
-                    all_commits[idx] = c
-                    all_parents[idx] = graph.parents[idx]
-                    all_parent_count[idx] = graph.parent_count[idx]
-
-                else:
-                    o = all_commits[idx]
-                    if c != o:
-                        raise Exception("dupe??")
-                    if all_parents[idx] != graph.parents[idx]:
-                        raise Exception("dupe??")
-
-                if idx not in all_children:
-                    all_children[idx] = set()
-                    all_child_count[idx] = 0
-
-                if graph.children[idx]:
-                    all_children[idx].update(graph.children[idx])
-                    all_child_count[idx] = len(all_children[idx])
-                    if idx in all_heads:
-                        all_heads.remove(idx)
-
-            all_tails.update(f for f in graph.tails if f not in graph.fragments)
-            all_heads.update(t for t in graph.heads if not all_children[t])
-
-        return cls(
-            commits = all_commits,
-            tails = all_tails,
-            heads = all_heads,
-            children = all_children,
-            parents = all_parents,
-            parent_count = all_parent_count,
-            child_count = all_child_count,
-            fragments = all_fragments,
-        )
+        return all_graphs
 
     def validate(self):
         # all tails items have no parents
@@ -398,7 +352,7 @@ class GitGraph:
             print("commits", len(self.commits), "walked", len(walked))
             raise Exception("missing commits")
 
-    def Branch(self, name, head, named_heads):
+    def to_branch(self, name, head, named_heads):
         history = self.first_parents(head)
 
         date = self.commits[history[0]].max_date
@@ -482,7 +436,7 @@ class GitBranch:
 
     def add_named_fragment(self, name, head, other):
         graph = self.graph
-        graph.add_fragment(other)
+        graph.add_graph(other)
         self.named_heads[name] = head
 
 
@@ -634,7 +588,6 @@ class GitBranch:
             date = new_date
 
         # fill out linear parents
-
 
         linear_parent = GitBranch.make_linear_parent(history, merged_graph.tails, merged_graph.children)
 
@@ -880,7 +833,7 @@ class GitRepo:
         graph = self.get_graph(head) # XXX - build a graph from the commit
         named_heads = {branch_name: head}
 
-        branch = graph.Branch(branch_name, head, named_heads)
+        branch = graph.to_branch(branch_name, head, named_heads)
         branch.validate()
 
         return branch
@@ -900,7 +853,7 @@ class GitRepo:
         graph = graph or self.get_graph(head)
         named_heads = dict(named_heads) if named_heads else {}
         named_heads.update(graph.named_heads)
-        return graph.Branch(name, head, named_heads)
+        return graph.to_branch(name, head, named_heads)
 
 
     def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
@@ -908,7 +861,7 @@ class GitRepo:
         branch_graph = self.get_graph(branch_head, replace_parents)
 
         named_heads = {branch_name: branch_head}
-        branch = graph.Branch(name, head, named_heads)
+        branch = graph.to_branch(name, head, named_heads)
         branch.validate()
 
         return branch
@@ -920,7 +873,7 @@ class GitRepo:
 
         named_heads = {branch_name: branch_head}
 
-        branch = branch_graph.Branch(name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads)
+        branch = branch_graph.to_branch(name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads)
 
         if include:
             all_remote_branches = self.all_remote_branch_names()
@@ -1143,6 +1096,7 @@ class GitRepo:
         writer = GitWriter(self, name)
         start_tree = GitTree([])
         graph = merged_branch.graph
+        grafted_trees = {}
         
         def merge_tree(prev_tree, tree, prefix):
             entries = [e for e in prev_tree.entries if e[1] not in prefix]
@@ -1164,11 +1118,10 @@ class GitRepo:
                 tree, ctree = merge_tree(start_tree, tree, prefix)
             else:
                 max_parent = max(graph.parents[idx], key=linear_parent.get)
-                parent_idx = writer.grafts[max_parent]
-                max_tree_idx = writer.graph.commits[parent_idx].tree
-                max_tree_idx, max_tree = self.get_tree(max_tree_idx) # xxx ? maybe grafted_tree again
-
+                max_tree = grafted_trees[max_parent]
                 tree, ctree = merge_tree(max_tree, tree, prefix)
+
+            grafted_trees[idx] = ctree
 
             return tree, ctree
 
@@ -1220,12 +1173,12 @@ class GitWriter:
 
         for k,v in self.named_heads.items():
             fragment = self.repo.get_graph(v, known=graph.commits)
-            graph.add_fragment(fragment)
+            graph.add_graph(fragment)
 
         # print("XXX", "new graph has ", len(graph.commits), "built graph", len(self.graph.commits))
 
         self.graph.validate()
-        branch = self.graph.Branch(self.name, self.head, dict(self.named_heads))
+        branch = self.graph.to_branch(self.name, self.head, dict(self.named_heads))
         branch.validate()
         return branch
 
@@ -1313,10 +1266,6 @@ class GitWriter:
         return self.head
 
 ####
-#       add_fragment uses empty and add commit
-#       union uses add_fragment
-
-# xxx - Writer
 # xxx - interweave
 #
 #       move named heads to repo_interweave
