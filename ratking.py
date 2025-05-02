@@ -83,6 +83,19 @@ class GitCommit:
             self.message == other.message,
         ))
 
+    def clone(self):
+        return GitCommit(
+            tree = self.tree,
+            parents = list(self.parents),
+            author = self.author,
+            committer = self.committer,
+            message = self.message,
+
+            max_date = self.max_date,
+            author_date = self.author_date,
+            committer_date = self.committer_date,
+        )
+
 @dataclass
 class GitTree:
     entries: list
@@ -747,7 +760,8 @@ class GitRepo:
 
     def get_tree(self, addr):
         if isinstance(addr, GitTree):
-            return addr
+            addr = self.repo.write_tree(addr)
+
         elif not isinstance(addr, str):
             raise Exception("bad")
 
@@ -756,7 +770,7 @@ class GitRepo:
         for i in obj:
             e = (int(i.filemode), i.name, str(i.id))
             entries.append(e)
-        return GitTree(entries)
+        return addr, GitTree(entries)
 
     def write_commit(self, c):
         tree = c.tree
@@ -789,7 +803,7 @@ class GitRepo:
         out = tb.write()
         return str(out)
 
-    def write_empty_commit(self, name, email, timestamp, message):
+    def start_branch(self, branch_name, name, email, timestamp, message):
         if timestamp.tzinfo is None:
             raise Exception("needs timestamp")
         ts = timestamp.astimezone(timezone.utc)
@@ -805,8 +819,14 @@ class GitRepo:
                 committer_date = ts,
         )
 
-        out = self.write_commit(c)
-        return out
+        head = self.write_commit(c)
+        graph = self.get_graph(head) # XXX - build a graph from the commit
+        named_heads = {branch_name: head}
+
+        branch = graph.Branch(branch_name, head, named_heads)
+        branch.validate()
+
+        return branch
 
     def get_branch_head(self, name):
         if name in self.git.branches:
@@ -989,8 +1009,8 @@ class GitRepo:
                 else:
                     dropped=True
             elif isinstance(bad, dict):
-                sub_tree = self.get_tree(i[2])
-                new_addr, tree_obj = self.clean_tree(i[2], sub_tree, bad)
+                sub_addr, sub_tree = self.get_tree(i[2])
+                new_addr, tree_obj = self.clean_tree(sub_addr, sub_tree, bad)
                 if new_addr != i[2]:
                     entries.append((i[0], i[1], new_addr))
                     dropped = True
@@ -1048,7 +1068,7 @@ class GitRepo:
 
         prev = None
         for head, commit, prefix in heads:
-            old_tree = self.get_tree(commit.tree)
+            tree_idx, old_tree = self.get_tree(commit.tree)
             tree_idx, tree = self.clean_tree(commit.tree, old_tree, bad_files)
 
             entries = [e for e in entries if e[1] not in prefix]
@@ -1177,8 +1197,8 @@ class GitWriter:
     def graft_commit(self, idx, fix_tree=None, fix_commit=None):
         start_parents = [self.head] if self.head else []
 
-        c1 = self.repo.get_commit(idx)
-        ctree = self.repo.get_tree(c1.tree)
+        c1 = self.repo.get_commit(idx).clone()
+        c1.tree, ctree = self.repo.get_tree(c1.tree)
 
         if not c1.parents:
             c1.parents = start_parents
@@ -1213,8 +1233,8 @@ class GitWriter:
                     raise Exception("fragment missing")
 
 
-                c1 = graph.commits[idx]
-                ctree = self.repo.get_tree(c1.tree)
+                c1 = graph.commits[idx].clone()
+                c1.tree, ctree = self.repo.get_tree(c1.tree)
 
                 if not c1.parents:
                     c1.parents = start_parents
@@ -1265,10 +1285,14 @@ class GitWriter:
 #       writer should be BranchWriter
 #       should build and return a graph, now there's no recalculation
 #
+#       
+#
 #
 # xxx - interweave
 #       move named heads to repo_interweave
 #       named_heads to interweave can take named_heads and not just commits
+#
+#       interweave can build trees, instead of in graft callback
 #
 #### future thoughts
 # 
