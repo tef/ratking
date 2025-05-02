@@ -140,6 +140,8 @@ class GitGraph:
         search = list(self.tails)
         counts = dict(self.parent_count)
 
+        search.sort(key=lambda x:self.commits[x].max_date)
+
         while search:
             c = search.pop(0)
             yield c
@@ -1049,6 +1051,10 @@ class GitRepo:
 
         new_branch = writer.to_branch()
         # print("XXX", len(new_branch.graph.commits), len(branch.graph.commits), len(writer.grafts))
+
+        for x, y in zip(branch.graph.walk_children(), new_branch.graph.walk_children()):
+            if writer.grafted(x) != y:
+                print('oooo')
         return new_branch
 
     def prefix_branch(self, branch, prefix):
@@ -1142,7 +1148,10 @@ class GitRepo:
                 tree, ctree = merge_tree(start_tree, tree, prefix)
             else:
                 max_parent = max(graph.parents[idx], key=linear_parent.get)
-                max_tree = writer.grafts[max_parent].tree
+                parent_idx = writer.grafts[max_parent]
+                max_tree_idx = writer.graph.commits[parent_idx].tree
+                max_tree_idx, max_tree = self.get_tree(max_tree_idx) # xxx ? maybe grafted_tree again
+
                 tree, ctree = merge_tree(max_tree, tree, prefix)
 
             return tree, ctree
@@ -1158,6 +1167,10 @@ class GitRepo:
         writer.graft(merged_branch, fix_tree=prefix_tree, fix_commit=prefix_commit)
 
         new_branch = writer.to_branch()
+
+        for x, y in zip(merged_branch.graph.walk_children(), new_branch.graph.walk_children()):
+            if writer.grafted(x) != y:
+                print('oooo')
         return new_branch
 
 
@@ -1165,13 +1178,6 @@ class GitRepo:
         return GitWriter(self, name)
 
 
-
-@dataclass
-class Graft:
-    idx: str
-    commit: object
-    root: str
-    tree: object
 
 
 class GitWriter:
@@ -1185,7 +1191,7 @@ class GitWriter:
         self.graph = GitGraph.new()
 
     def grafted(self, idx):
-        return self.grafts[idx].idx
+        return self.grafts[idx]
 
     def save_grafts(self, path):
         with open(path, "w+") as fh:
@@ -1216,7 +1222,7 @@ class GitWriter:
         if not c1.parents:
             c1.parents = start_parents
         else:
-            c1.parents = [self.grafts[p].idx for p in c1.parents[idx]]
+            c1.parents = [self.grafts[p] for p in c1.parents[idx]]
         
         if fix_tree is not None:
             c1.tree, ctree = fix_tree(self, idx, c1.tree, ctree)
@@ -1225,7 +1231,7 @@ class GitWriter:
             c1.author, c1.committer, c1.message = fix_commit(self, idx, c1)
 
         c2 = self.repo.write_commit(c1)
-        self.grafts[idx] = Graft(c2, c1, c1.tree, ctree)
+        self.grafts[idx] = c2
         self.replaces[c2] = idx
         self.head = c2
 
@@ -1237,8 +1243,6 @@ class GitWriter:
         start_parents = [self.head] if self.head else []
 
         graph = branch.graph
-        new_heads = {}
-
         graph_total = len(graph.commits)
         graph_count = 0
 
@@ -1255,7 +1259,7 @@ class GitWriter:
                 if not c1.parents:
                     c1.parents = start_parents
                 else:
-                    c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
+                    c1.parents = [self.grafts[p] for p in graph.parents[idx]]
                 
                 if fix_tree is not None:
                     c1.tree, ctree = fix_tree(self, idx, c1.tree, ctree)
@@ -1264,21 +1268,15 @@ class GitWriter:
                     c1.author, c1.committer, c1.message = fix_commit(self, idx, c1)
 
                 c2 = self.repo.write_commit(c1)
-                self.grafts[idx] = Graft(c2, c1, c1.tree, ctree)
+                self.grafts[idx] = c2
                 self.replaces[c2] = idx
                 self.graph.add_commit(c2, c1)
 
-            else:
-                graft = self.grafts[idx]
-                c1 = graft.commit
-                c2 = graft.idx
-                ctree = graft.tree
+                if idx in graph.heads:
+                    self.graph.heads.add(c2)
 
             graph_count += 1
 
-            if idx in graph.heads:
-                new_heads[idx] = c2
-                self.graph.heads.add(c2)
 
             if graph_count & 512 == 0:
                 per = graph_count/graph_total
@@ -1291,18 +1289,16 @@ class GitWriter:
             if x not in self.grafts:
                 raise Exception("missing")
 
-        self.head = self.grafts[branch.head].idx
-        self.named_heads.update({k: self.grafts[v].idx for k,v in branch.named_heads.items()})
+        self.head = self.grafts[branch.head]
+        self.named_heads.update({k: self.grafts[v] for k,v in branch.named_heads.items()})
 
         for k,v in self.named_heads.items():
             self.repo.get_commit(v)
         return self.head
 
 ####
-#       get_graph() uses graph.empty() and graph.add_commit
 #       add_fragment uses empty and add commit
 #       union uses add_fragment
-#       graft uses empty and add commit
 
 # xxx - Writer
 #       and grafts[] only needs idxs now as the other info is in graph
