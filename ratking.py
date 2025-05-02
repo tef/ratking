@@ -755,6 +755,21 @@ class GitRepo:
         o = self.git.remotes[rname]
         o.fetch(callbacks=AuthCallbacks())
 
+    def remote_branches(self, remote_name):
+        remote = self.git.remotes[remote_name]
+        remote_refs = remote.ls_remotes(callbacks=AuthCallbacks())
+        HEAD = None
+        branches = []
+        for ref in remote_refs:
+            if ref['name'] == "HEAD":
+                HEAD = ref['symref_target'].split("refs/heads/",1)[1]
+            elif ref['name'].startswith("refs/heads/"):
+                name = ref['name'].split("refs/heads/",1)[1]
+                branches.append(name)
+        return HEAD, branches
+
+
+
     def all_remote_branch_names(self, refresh=False):
         if self._all_remotes and not refresh:
             return self._all_remotes
