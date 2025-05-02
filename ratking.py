@@ -755,7 +755,7 @@ class GitRepo:
         o = self.git.remotes[rname]
         o.fetch(callbacks=AuthCallbacks())
 
-    def all_remote_branches(self, refresh=False):
+    def all_remote_branch_names(self, refresh=False):
         if self._all_remotes and not refresh:
             return self._all_remotes
         all_branches = list(self.git.branches.remote)
@@ -907,7 +907,7 @@ class GitRepo:
         branch = branch_graph.Branch(name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads)
 
         if include:
-            all_remote_branches = self.all_remote_branches()
+            all_remote_branches = self.all_remote_branch_names()
             remote_branches = all_remote_branches.get(rname,{})
 
             for name, idx in remote_branches.items():
@@ -1301,8 +1301,6 @@ class GitWriter:
 #       union uses add_fragment
 
 # xxx - Writer
-#       and grafts[] only needs idxs now as the other info is in graph
-#
 # xxx - interweave
 #
 #       move named heads to repo_interweave
