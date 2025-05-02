@@ -1265,15 +1265,6 @@ class GitWriter:
             self.repo.get_commit(v)
         return self.head
 
-####
-# xxx - interweave
-#
-#       move named heads to repo_interweave
-#         named_heads to interweave can take named_heads and not just commits
-#
-#       interweave can build trees, instead of in graft callback
-#       interweave can fix commits, instead of in graft callback
-#
 #### future thoughts
 # 
 # xxx - datetime handling in Signature - @property 
