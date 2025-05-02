@@ -467,21 +467,17 @@ class GitBranch:
 
     @classmethod
     def merge_linear_history(self, branches):
-        branch_heads = set()
-        branch_tails = set()
         graphs = {}
         branch_history = {}
         branch_linear_parent = {}
 
         for name, branch in branches.items():
-            graphs[name] = branch.graph
+            graph = branch.graph
+            graphs[name] = graph
 
-            branch_heads.add(branch.head)
-            branch_tails.add(branch.tail)
-
-            history = branch.graph.first_parents(branch.head)
+            history = graph.first_parents(branch.head)
             branch_history[name] = history
-            branch_linear_parent[name] = GitBranch.make_linear_parent(history, branch.graph.tails, branch.graph.children)
+            branch_linear_parent[name] = GitBranch.make_linear_parent(history, graph.tails, graph.children)
             
         merged_graph = GitGraph.union(graphs)
 
@@ -522,20 +518,23 @@ class GitBranch:
         head = new_history[-1]
         tail = new_history[0]
 
-        if tail not in merged_graph.tails:
-            raise Exception("bad")
         if merged_graph.commits[tail].parents:
             raise Exception("bad")
         if merged_graph.parents[tail]:
             raise Exception("bad")
 
-        if head not in branch_heads or tail not in branch_tails:
-            raise Exception("bad history")
-
-        # calculate old linear history
-        for name, history in branch_history.items():
-            graph = branches[name].graph
-
+        for name, branch in branches.items():
+            h = list(branch_history[name])
+            h.reverse()
+            g = branch.graph
+            
+            for idx in new_history:
+                if idx in g.commits:
+                    i = h.pop()
+                    if idx != i:
+                        raise Exception("disorder")
+            if h:
+                raise Exception("missing")
 
         return new_history, branch_history, branch_linear_parent, merged_graph
 
