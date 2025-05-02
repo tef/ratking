@@ -18,8 +18,8 @@ GIT_FILE_MODE = 0o100_644
 GIT_FILE_MODE2 = 0o100_664
 GIT_EXEC_MODE = 0o100_755
 GIT_LINK_MODE = 0o120_000
-GIT_GITLINK_MODE = 0o160_000 # actually a submodule, blegh
-GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904" # Wow, isn't git amazing.
+GIT_GITLINK_MODE = 0o160_000  # actually a submodule, blegh
+GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # Wow, isn't git amazing.
 
 
 @functools.cache
@@ -27,11 +27,13 @@ def compile_pattern(pattern):
     regex = glob.translate(pattern, recursive=True)
     return re.compile(regex)
 
+
 def glob_match(pattern, string):
     if pattern is None:
         return None
     rx = compile_pattern(pattern)
     return rx.match(string) is not None
+
 
 @dataclass
 class GitSignature:
@@ -42,25 +44,30 @@ class GitSignature:
 
     def replace(self, name=None, email=None, time=None, offset=None):
         return GitSignature(
-            name = name if name else self.name,
-            email = email if email else self.email,
-            time = time if time else self.time,
-            offset = offset if offset else self.offset,
+            name=name if name else self.name,
+            email=email if email else self.email,
+            time=time if time else self.time,
+            offset=offset if offset else self.offset,
         )
 
     def to_pygit(self):
-        #time = int(self.date.timestamp())
-        #offset = int(self.date.tzinfo.utcoffset(None).total_seconds()) // 60
-        return pygit2.Signature(name=self.name, email=self.email, time=self.time, offset=self.offset)
+        # time = int(self.date.timestamp())
+        # offset = int(self.date.tzinfo.utcoffset(None).total_seconds()) // 60
+        return pygit2.Signature(
+            name=self.name, email=self.email, time=self.time, offset=self.offset
+        )
 
     def __str__(self):
         return f"{self.name} <{self.email}>"
 
     @classmethod
     def from_pygit(self, obj):
-        #tz = timezone(timedelta(minutes=obj.offset))
-        #date = datetime.fromtimestamp(float(obj.time), tz)
-        return GitSignature(name=obj.name, email=obj.email, time=obj.time, offset=obj.offset)
+        # tz = timezone(timedelta(minutes=obj.offset))
+        # date = datetime.fromtimestamp(float(obj.time), tz)
+        return GitSignature(
+            name=obj.name, email=obj.email, time=obj.time, offset=obj.offset
+        )
+
 
 @dataclass
 class GitCommit:
@@ -74,31 +81,34 @@ class GitCommit:
     message: str
 
     def __eq__(self, other):
-        return all((
-            self.tree == other.tree,
-            self.parents == other.parents,
-            self.max_date == other.max_date,
-            self.author == other.author,
-            self.committer == other.committer,
-            self.message == other.message,
-        ))
+        return all(
+            (
+                self.tree == other.tree,
+                self.parents == other.parents,
+                self.max_date == other.max_date,
+                self.author == other.author,
+                self.committer == other.committer,
+                self.message == other.message,
+            )
+        )
 
     def clone(self):
         return GitCommit(
-            tree = self.tree,
-            parents = list(self.parents),
-            author = self.author,
-            committer = self.committer,
-            message = self.message,
-
-            max_date = self.max_date,
-            author_date = self.author_date,
-            committer_date = self.committer_date,
+            tree=self.tree,
+            parents=list(self.parents),
+            author=self.author,
+            committer=self.committer,
+            message=self.message,
+            max_date=self.max_date,
+            author_date=self.author_date,
+            committer_date=self.committer_date,
         )
+
 
 @dataclass
 class GitTree:
     entries: list
+
 
 @dataclass
 class GitGraph:
@@ -121,26 +131,26 @@ class GitGraph:
             parent_count={},
             children={},
             child_count={},
-            fragments=set()
+            fragments=set(),
         )
 
     def clone(self):
         return GitGraph(
-            commits = dict(self.commits),
-            tails = set(self.tails),
-            heads = set(self.heads),
-            children = {k:set(v) for k,v in self.children.items()},
-            parents = {k:list(v) for k,v in self.parents.items()},
-            parent_count = dict(parent_count),
-            child_count = dict(child_count),
-            fragments = set(self.fragments),
+            commits=dict(self.commits),
+            tails=set(self.tails),
+            heads=set(self.heads),
+            children={k: set(v) for k, v in self.children.items()},
+            parents={k: list(v) for k, v in self.parents.items()},
+            parent_count=dict(parent_count),
+            child_count=dict(child_count),
+            fragments=set(self.fragments),
         )
 
     def walk_children(self):
         search = list(self.tails)
         counts = dict(self.parent_count)
 
-        search.sort(key=lambda x:self.commits[x].max_date)
+        search.sort(key=lambda x: self.commits[x].max_date)
 
         while search:
             c = search.pop(0)
@@ -179,7 +189,6 @@ class GitGraph:
         history.reverse()
         return history
 
-
     def add_commit(self, idx, c):
         c_parents = c.parents
 
@@ -202,7 +211,6 @@ class GitGraph:
                 self.children[pidx] = set()
             self.children[pidx].add(idx)
             self.child_count[pidx] = len(self.children[pidx])
-
 
     def add_graph(self, other):
         for idx in other.commits:
@@ -280,7 +288,7 @@ class GitGraph:
             children = self.children[idx]
             if not children:
                 if idx not in self.heads:
-                    raise("untracked head")
+                    raise ("untracked head")
             for child in children:
                 if child not in inverted_children:
                     inverted_children[child] = set()
@@ -288,7 +296,7 @@ class GitGraph:
 
                 m = [i for i in self.parents[child] if i == idx]
                 if len(m) != 1 or m[0] != idx:
-                    #print(c.parents, m)
+                    # print(c.parents, m)
                     print("parent commit", idx)
                     print("child commit", child, "parents", self.parents[idx])
                     raise Exception("child listed, not in parent")
@@ -298,7 +306,7 @@ class GitGraph:
         for c in self.commits:
             commit_parents = self.commits[c].parents
             graph_parents = self.parents[c]
-            child_parents  = inverted_children.get(c, set())
+            child_parents = inverted_children.get(c, set())
 
             if commit_parents != graph_parents:
                 raise Exception(f"bad parents: {c}")
@@ -343,8 +351,8 @@ class GitGraph:
                 heads.add(i)
 
         if heads != self.heads:
-            print("extra", heads-self.heads)
-            print("missing", self.heads-heads)
+            print("extra", heads - self.heads)
+            print("missing", self.heads - heads)
 
             raise Exception("heads is not correct")
 
@@ -364,16 +372,15 @@ class GitGraph:
         linear_parent = GitBranch.make_linear_parent(history, self.tails, self.children)
 
         if set(self.commits) != set(linear_parent):
-            raise Exception(f'bad {len(self.commits)} {len(linear_parent)}')
+            raise Exception(f"bad {len(self.commits)} {len(linear_parent)}")
 
         return GitBranch(
-            name = name,
-            head = head,
-            graph = self,
-            tail = history[0],
-            named_heads = named_heads,
+            name=name,
+            head=head,
+            graph=self,
+            tail=history[0],
+            named_heads=named_heads,
         )
-
 
 
 @dataclass
@@ -386,11 +393,11 @@ class GitBranch:
 
     def clone(self):
         return GitBranch(
-            name = str(name),
-            head = str(self.head),
-            graph = graph.clone(),
-            tail = str(self.tail),
-            named_heads = dict(self.named_heads),
+            name=str(name),
+            head=str(self.head),
+            graph=graph.clone(),
+            tail=str(self.tail),
+            named_heads=dict(self.named_heads),
         )
 
     def common_ancestor(self, other):
@@ -410,7 +417,6 @@ class GitBranch:
 
             before = x
         return before, after
-
 
     def validate(self):
         self.graph.validate()
@@ -433,16 +439,14 @@ class GitBranch:
         if history[-1] != self.head:
             raise Exception("how")
 
-
     def add_named_fragment(self, name, head, other):
         graph = self.graph
         graph.add_graph(other)
         self.named_heads[name] = head
 
-
     @staticmethod
     def make_linear_parent(history, tails, children):
-        linear_parent = {c:n for n,c in enumerate(history,1)}
+        linear_parent = {c: n for n, c in enumerate(history, 1)}
 
         for lc in reversed(history):
             n = linear_parent[lc]
@@ -477,8 +481,10 @@ class GitBranch:
 
             history = graph.first_parents(branch.head)
             branch_history[name] = history
-            branch_linear_parent[name] = GitBranch.make_linear_parent(history, graph.tails, graph.children)
-            
+            branch_linear_parent[name] = GitBranch.make_linear_parent(
+                history, graph.tails, graph.children
+            )
+
         merged_graph = GitGraph.union(graphs)
 
         history = [list(h) for h in branch_history.values()]
@@ -527,7 +533,7 @@ class GitBranch:
             h = list(branch_history[name])
             h.reverse()
             g = branch.graph
-            
+
             for idx in new_history:
                 if idx in g.commits:
                     i = h.pop()
@@ -542,7 +548,9 @@ class GitBranch:
     def interweave(cls, name, branches, named_heads=None, merge_named_heads=()):
 
         # create a new linear history
-        history, branch_history, branch_linear_parent, merged_graph = cls.merge_linear_history(branches)
+        history, branch_history, branch_linear_parent, merged_graph = (
+            cls.merge_linear_history(branches)
+        )
 
         head, tail = history[-1], history[0]
 
@@ -577,7 +585,7 @@ class GitBranch:
         for idx in history[1:]:
             old_parents = merged_graph.commits[idx].parents
             if prev not in old_parents:
-                raise Exception('bad merge', prev, idx)
+                raise Exception("bad merge", prev, idx)
 
             new_date = merged_graph.commits[idx].max_date
             if new_date < date:
@@ -588,7 +596,9 @@ class GitBranch:
 
         # fill out linear parents
 
-        linear_parent = GitBranch.make_linear_parent(history, merged_graph.tails, merged_graph.children)
+        linear_parent = GitBranch.make_linear_parent(
+            history, merged_graph.tails, merged_graph.children
+        )
 
         # validate linear parents
 
@@ -605,7 +615,7 @@ class GitBranch:
                     print(m, "found in linear history")
                 else:
                     print(m, "not found in linear history")
-            raise Exception(f'bad {len(merged_graph.commits)} {len(linear_parent)}')
+            raise Exception(f"bad {len(merged_graph.commits)} {len(linear_parent)}")
 
         # ensure linear ordering of source branches is preserved in merged branch
 
@@ -621,20 +631,19 @@ class GitBranch:
                         # xxx - and we error elsewhere about it
                         raise Exception("bad")
                 lp = branch_linear_parent[name][c]
-                lp_idx = branch_history[name][lp-1]
+                lp_idx = branch_history[name][lp - 1]
                 nlp = linear_parent[lp_idx]
                 if nlp != linear_parent[c]:
                     raise Exception("bad")
 
         # create the named heads for merged branch
         # find all merge points passed in, passed { "named head" : {"upstream name":"commit id"}}
-        
+
         all_named_heads = {}
 
         for name, branch in branches.items():
             for k, v in branch.named_heads.items():
                 all_named_heads[f"{name}/{k}"] = v
-
 
         named_heads = {} if named_heads is None else named_heads
         merge_named_heads = () if merge_named_heads is None else merge_named_heads
@@ -648,15 +657,18 @@ class GitBranch:
 
         for point_name, merge_points in named_heads.items():
 
-            all_merge_points =  [(idx, name, branch_linear_parent[name][idx], linear_parent[idx]) for name, idx in merge_points.items()]
-            all_merge_points.sort(key=lambda x:x[3])
+            all_merge_points = [
+                (idx, name, branch_linear_parent[name][idx], linear_parent[idx])
+                for name, idx in merge_points.items()
+            ]
+            all_merge_points.sort(key=lambda x: x[3])
 
             merge_point = all_merge_points[-1][0]
             merge_point_time = all_merge_points[-1][-1]
 
             for idx, name, old_lp, new_lp in all_merge_points:
                 if old_lp == len(branch_history[name]):
-                    pass # last commit, no worries
+                    pass  # last commit, no worries
                 else:
                     next_c = branch_history[name][old_lp]
                     next_lp = linear_parent[next_c]
@@ -666,15 +678,16 @@ class GitBranch:
             all_named_heads[point_name] = merge_point
 
         branch = GitBranch(
-                name = name,
-                graph = merged_graph,
-                head = head,
-                tail = tail,
-                named_heads=all_named_heads
+            name=name,
+            graph=merged_graph,
+            head=head,
+            tail=tail,
+            named_heads=all_named_heads,
         )
 
         branch.validate()
         return branch, linear_parent
+
 
 # used for fetch
 class AuthCallbacks(pygit2.RemoteCallbacks):
@@ -684,7 +697,7 @@ class AuthCallbacks(pygit2.RemoteCallbacks):
         elif allowed_types & pygit2.enums.CredentialType.SSH_KEY:
             x = os.path.expanduser("~/.ssh/id_ed25519.pub")
             y = os.path.expanduser("~/.ssh/id_ed25519")
-            return pygit2.Keypair("git",x,y, "")
+            return pygit2.Keypair("git", x, y, "")
         else:
             return None
 
@@ -714,14 +727,12 @@ class GitRepo:
         HEAD = None
         branches = []
         for ref in remote_refs:
-            if ref['name'] == "HEAD":
-                HEAD = ref['symref_target'].split("refs/heads/",1)[1]
-            elif ref['name'].startswith("refs/heads/"):
-                name = ref['name'].split("refs/heads/",1)[1]
+            if ref["name"] == "HEAD":
+                HEAD = ref["symref_target"].split("refs/heads/", 1)[1]
+            elif ref["name"].startswith("refs/heads/"):
+                name = ref["name"].split("refs/heads/", 1)[1]
                 branches.append(name)
         return HEAD, branches
-
-
 
     def all_remote_branch_names(self, refresh=False):
         if self._all_remotes and not refresh:
@@ -736,15 +747,18 @@ class GitRepo:
         self._all_remotes = out
         return out
 
-
     def get_commit(self, addr):
         obj = self.git.get(addr)
 
         a_tz = timezone(timedelta(minutes=obj.author.offset))
-        a_date = datetime.fromtimestamp(float(obj.author.time), a_tz).astimezone(timezone.utc)
+        a_date = datetime.fromtimestamp(float(obj.author.time), a_tz).astimezone(
+            timezone.utc
+        )
 
         c_tz = timezone(timedelta(minutes=obj.committer.offset))
-        c_date = datetime.fromtimestamp(float(obj.committer.time), c_tz).astimezone(timezone.utc)
+        c_date = datetime.fromtimestamp(float(obj.committer.time), c_tz).astimezone(
+            timezone.utc
+        )
 
         tree = str(obj.tree_id)
 
@@ -756,16 +770,15 @@ class GitRepo:
             raise Exception("wait")
 
         return GitCommit(
-                tree = tree,
-                parents = list(str(x) for x in obj.parent_ids),
-                author=author,
-                committer=committer,
-                message = message,
-                max_date = max(a_date, c_date),
-                author_date = a_date,
-                committer_date = c_date,
+            tree=tree,
+            parents=list(str(x) for x in obj.parent_ids),
+            author=author,
+            committer=committer,
+            message=message,
+            max_date=max(a_date, c_date),
+            author_date=a_date,
+            committer_date=c_date,
         )
-
 
     def get_tree(self, addr):
         if isinstance(addr, GitTree):
@@ -788,7 +801,7 @@ class GitRepo:
         elif isinstance(c.tree, str):
             tree = pygit2.Oid(hex=tree)
         else:
-            raise Exception('bad')
+            raise Exception("bad")
         parents = [pygit2.Oid(hex=p) for p in c.parents]
         author = c.author.to_pygit()
         committer = c.committer.to_pygit()
@@ -799,7 +812,7 @@ class GitRepo:
 
     def write_tree(self, t):
         tb = self.git.TreeBuilder()
-        t.entries.sort(key=lambda x: x[1] if x[0] != GIT_DIR_MODE else x[1]+'/')
+        t.entries.sort(key=lambda x: x[1] if x[0] != GIT_DIR_MODE else x[1] + "/")
         for mode, name, addr in t.entries:
             if isinstance(addr, GitTree):
                 i = self.write_tree(addr)
@@ -818,18 +831,18 @@ class GitRepo:
         ts = timestamp.astimezone(timezone.utc)
         signature = GitSignature(name, email, int(ts.timestamp()), 0)
         c = GitCommit(
-                tree = GIT_EMPTY_TREE,
-                parents=[],
-                author=signature,
-                committer=signature,
-                message=message,
-                max_date = ts,
-                author_date = ts,
-                committer_date = ts,
+            tree=GIT_EMPTY_TREE,
+            parents=[],
+            author=signature,
+            committer=signature,
+            message=message,
+            max_date=ts,
+            author_date=ts,
+            committer_date=ts,
         )
 
         head = self.write_commit(c)
-        graph = self.get_graph(head) # XXX - build a graph from the commit
+        graph = self.get_graph(head)  # XXX - build a graph from the commit
         named_heads = {branch_name: head}
 
         branch = graph.to_branch(branch_name, head, named_heads)
@@ -854,7 +867,6 @@ class GitRepo:
         named_heads.update(graph.named_heads)
         return graph.to_branch(name, head, named_heads)
 
-
     def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
         branch_head = self.get_branch_head(branch_name)
         branch_graph = self.get_graph(branch_head, replace_parents)
@@ -865,18 +877,22 @@ class GitRepo:
 
         return branch
 
-    def get_remote_branch(self, rname, branch_name, include=None, exclude=None, replace_parents=None):
+    def get_remote_branch(
+        self, rname, branch_name, include=None, exclude=None, replace_parents=None
+    ):
 
         branch_head = self.get_remote_branch_head(rname, branch_name)
         branch_graph = self.get_graph(branch_head, replace_parents)
 
         named_heads = {branch_name: branch_head}
 
-        branch = branch_graph.to_branch(name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads)
+        branch = branch_graph.to_branch(
+            name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads
+        )
 
         if include:
             all_remote_branches = self.all_remote_branch_names()
-            remote_branches = all_remote_branches.get(rname,{})
+            remote_branches = all_remote_branches.get(rname, {})
 
             for name, idx in remote_branches.items():
                 if name == branch_name:
@@ -890,7 +906,7 @@ class GitRepo:
                 if all(f in branch_graph.commits for f in graph.tails):
                     branch.add_named_fragment(name, idx, graph)
                 else:
-                    pass # orphan branch or new tail commit
+                    pass  # orphan branch or new tail commit
 
         branch.validate()
         return branch
@@ -898,16 +914,15 @@ class GitRepo:
     def get_fragment(self, head):
         init = self.get_commit(head)
         return GitGraph(
-            commits = {head: init},
-            heads = set([head]),
-            tails = set([head]),
-            children = {head: set()},
-            parents =  {head: set()},
-            parent_count = {head: 0},
-            child_count = {head: 0},
-            fragments = set([head]),
+            commits={head: init},
+            heads=set([head]),
+            tails=set([head]),
+            children={head: set()},
+            parents={head: set()},
+            parent_count={head: 0},
+            child_count={head: 0},
+            fragments=set([head]),
         )
-
 
     def get_graph(self, head, replace_parents=None, known=None):
         if replace_parents is None:
@@ -950,7 +965,7 @@ class GitRepo:
     def get_graph_names(self, graph):
         names = {}
 
-        def add_name(i,n):
+        def add_name(i, n):
             if n not in names:
                 names[n] = set()
             names[n].add(i)
@@ -977,13 +992,13 @@ class GitRepo:
             if bad is None:
                 entries.append(i)
             elif callable(bad):
-                out = bad(i[0],i[1],i[2])
+                out = bad(i[0], i[1], i[2])
                 if out:
                     entries.append(out)
                     if out != i:
-                        dropped=True
+                        dropped = True
                 else:
-                    dropped=True
+                    dropped = True
             elif isinstance(bad, dict):
                 sub_addr, sub_tree = self.get_tree(i[2])
                 new_addr, tree_obj = self.clean_tree(sub_addr, sub_tree, bad)
@@ -992,7 +1007,7 @@ class GitRepo:
                     dropped = True
             else:
                 dropped = True
-                pass # delete it, if it's an empty hash
+                pass  # delete it, if it's an empty hash
         if not dropped:
             return addr, old_tree
         new_tree = GitTree(entries)
@@ -1005,7 +1020,6 @@ class GitRepo:
             entries.append(e)
         t = GitTree(entries)
         return self.repo.write_tree(t), t
-
 
     def clean_branch(self, branch, bad_files):
         writer = GitWriter(self, branch.name)
@@ -1022,7 +1036,7 @@ class GitRepo:
 
         for x, y in zip(branch.graph.walk_children(), new_branch.graph.walk_children()):
             if writer.grafted(x) != y:
-                print('oooo')
+                print("oooo")
         return new_branch
 
     def prefix_branch(self, branch, prefix):
@@ -1045,7 +1059,7 @@ class GitRepo:
             prefix = [name]
             heads.append((head, c, prefix))
 
-        heads.sort(key=lambda x:x[1].max_date)
+        heads.sort(key=lambda x: x[1].max_date)
         entries = []
 
         prev = None
@@ -1063,26 +1077,33 @@ class GitRepo:
             tidx = self.write_tree(t)
 
             if fix_commit is not None:
-                author, committer, message = fix_commit(commit,  ", ".join(sorted(prefix)))
+                author, committer, message = fix_commit(
+                    commit, ", ".join(sorted(prefix))
+                )
             else:
-                author, committer, message = commit.author, commit.committer, commit.message
+                author, committer, message = (
+                    commit.author,
+                    commit.committer,
+                    commit.message,
+                )
 
             c1 = GitCommit(
-                    tree=tidx,
-                    parents=([prev] if prev else []),
-                    author=author,
-                    committer=committer,
-                    message = message,
-                    max_date = commit.max_date,
-                    author_date = commit.author_date,
-                    committer_date = commit.committer_date,
+                tree=tidx,
+                parents=([prev] if prev else []),
+                author=author,
+                committer=committer,
+                message=message,
+                max_date=commit.max_date,
+                author_date=commit.author_date,
+                committer_date=commit.committer_date,
             )
 
             prev = self.write_commit(c1)
         return prev
 
-
-    def interweave_branches(self, name, branches, named_heads=None, merge_named_heads=None, fix_commit=None):
+    def interweave_branches(
+        self, name, branches, named_heads=None, merge_named_heads=None, fix_commit=None
+    ):
         graph_prefix = {}
         for name, branch in branches.items():
             for c in branch.graph.commits:
@@ -1090,13 +1111,15 @@ class GitRepo:
                     graph_prefix[c] = set()
                 graph_prefix[c].add(name)
 
-        merged_branch, linear_parent = GitBranch.interweave(name, branches, named_heads=named_heads, merge_named_heads=merge_named_heads)
+        merged_branch, linear_parent = GitBranch.interweave(
+            name, branches, named_heads=named_heads, merge_named_heads=merge_named_heads
+        )
 
         writer = GitWriter(self, name)
         start_tree = GitTree([])
         graph = merged_branch.graph
         grafted_trees = {}
-        
+
         def merge_tree(prev_tree, tree, prefix):
             entries = [e for e in prev_tree.entries if e[1] not in prefix]
             for p in prefix:
@@ -1104,7 +1127,6 @@ class GitRepo:
                 entries.append(e)
             t = GitTree(entries)
             return self.write_tree(t), t
-
 
         def prefix_tree(writer, idx, tree, ctree):
             prefix = graph_prefix
@@ -1136,23 +1158,22 @@ class GitRepo:
 
         new_branch = writer.to_branch()
 
-        for x, y in zip(merged_branch.graph.walk_children(), new_branch.graph.walk_children()):
+        for x, y in zip(
+            merged_branch.graph.walk_children(), new_branch.graph.walk_children()
+        ):
             if writer.grafted(x) != y:
-                print('oooo')
+                print("oooo")
         return new_branch
-
 
     def Writer(self, name):
         return GitWriter(self, name)
-
-
 
 
 class GitWriter:
     def __init__(self, repo, name):
         self.repo = repo
         self.name = name
-        self.head = None # maybe support multiple heads as parents
+        self.head = None  # maybe support multiple heads as parents
         self.named_heads = {}
         self.grafts = {}
         self.replaces = {}
@@ -1163,14 +1184,14 @@ class GitWriter:
 
     def save_grafts(self, path):
         with open(path, "w+") as fh:
-            out = {k:v.idx for k,v in self.grafts.items}
+            out = {k: v.idx for k, v in self.grafts.items}
             json.dump(out, fh, sort_keys=True, indent=2)
 
     def to_branch(self):
         # XXX -  BUILD A GRAPH
         graph = self.repo.get_graph(self.head)
 
-        for k,v in self.named_heads.items():
+        for k, v in self.named_heads.items():
             fragment = self.repo.get_graph(v, known=graph.commits)
             graph.add_graph(fragment)
 
@@ -1191,7 +1212,7 @@ class GitWriter:
             c1.parents = start_parents
         else:
             c1.parents = [self.grafts[p] for p in c1.parents[idx]]
-        
+
         if fix_tree is not None:
             c1.tree, ctree = fix_tree(self, idx, c1.tree, ctree)
 
@@ -1214,12 +1235,10 @@ class GitWriter:
         graph_total = len(graph.commits)
         graph_count = 0
 
-
         for idx in graph.walk_children():
             if idx not in self.grafts:
                 if idx in graph.fragments:
                     raise Exception("fragment missing")
-
 
                 c1 = graph.commits[idx].clone()
                 c1.tree, ctree = self.repo.get_tree(c1.tree)
@@ -1228,7 +1247,7 @@ class GitWriter:
                     c1.parents = start_parents
                 else:
                     c1.parents = [self.grafts[p] for p in graph.parents[idx]]
-                
+
                 if fix_tree is not None:
                     c1.tree, ctree = fix_tree(self, idx, c1.tree, ctree)
 
@@ -1245,12 +1264,13 @@ class GitWriter:
 
             graph_count += 1
 
-
             if graph_count & 512 == 0:
-                per = graph_count/graph_total
-                print(f"\r    > progress {per:.2%} {graph_count} of {graph_total}", end="")
+                per = graph_count / graph_total
+                print(
+                    f"\r    > progress {per:.2%} {graph_count} of {graph_total}", end=""
+                )
 
-        per = graph_count/graph_total
+        per = graph_count / graph_total
         print(f"\r    > progress {per:.2%} {graph_count} of {graph_total}")
 
         for x in graph.commits:
@@ -1258,15 +1278,18 @@ class GitWriter:
                 raise Exception("missing")
 
         self.head = self.grafts[branch.head]
-        self.named_heads.update({k: self.grafts[v] for k,v in branch.named_heads.items()})
+        self.named_heads.update(
+            {k: self.grafts[v] for k, v in branch.named_heads.items()}
+        )
 
-        for k,v in self.named_heads.items():
+        for k, v in self.named_heads.items():
             self.repo.get_commit(v)
         return self.head
 
+
 #### future thoughts
-# 
-# xxx - datetime handling in Signature - @property 
+#
+# xxx - datetime handling in Signature - @property
 #
 # xxx - general idea of finer grained merges, file based or subdirectory based
 #
@@ -1289,4 +1312,3 @@ class GitWriter:
 #       graph.properties = set([monotonic, monotonic-author, monotonic-committer])
 #
 # xxx - preserving old commit names in headers / changes
-
