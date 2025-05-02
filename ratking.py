@@ -179,9 +179,6 @@ class GitGraph:
 
 
     def add_commit(self, idx, c):
-        if idx in self.commits:
-            return # we added a fragment,
-
         c_parents = c.parents
 
         self.commits[idx] = c
@@ -483,6 +480,7 @@ class GitBranch:
     def add_named_fragment(self, name, head, other):
         graph = self.graph
         graph.add_fragment(other)
+        self.named_heads[name] = head
 
 
     @staticmethod
@@ -1041,6 +1039,7 @@ class GitRepo:
 
     def clean_branch(self, branch, bad_files):
         writer = GitWriter(self, branch.name)
+        branch.validate()
 
         def fix_tree(writer, idx, tree, ctree):
             tree, ctree = self.clean_tree(tree, ctree, bad_files)
@@ -1048,8 +1047,9 @@ class GitRepo:
 
         writer.graft(branch, fix_tree=fix_tree, fix_commit=None)
 
-        branch = writer.to_branch()
-        return branch
+        new_branch = writer.to_branch()
+        # print("XXX", len(new_branch.graph.commits), len(branch.graph.commits), len(writer.grafts))
+        return new_branch
 
     def prefix_branch(self, branch, prefix):
         writer = GitWriter(self, branch.name)
@@ -1175,13 +1175,14 @@ class Graft:
 
 
 class GitWriter:
-    def __init__(self, repo, name, head=None, named_heads=None):
+    def __init__(self, repo, name):
         self.repo = repo
         self.name = name
-        self.head = head # maybe support multiple heads as parents
-        self.named_heads = named_heads if named_heads else {}
+        self.head = None # maybe support multiple heads as parents
+        self.named_heads = {}
         self.grafts = {}
         self.replaces = {}
+        self.graph = GitGraph.new()
 
     def grafted(self, idx):
         return self.grafts[idx].idx
@@ -1194,12 +1195,15 @@ class GitWriter:
     def to_branch(self):
         # XXX -  BUILD A GRAPH
         graph = self.repo.get_graph(self.head)
+
         for k,v in self.named_heads.items():
             fragment = self.repo.get_graph(v, known=graph.commits)
             graph.add_fragment(fragment)
 
-        branch = graph.Branch(self.name, self.head, dict(self.named_heads))
+        # print("XXX", "new graph has ", len(graph.commits), "built graph", len(self.graph.commits))
 
+        self.graph.validate()
+        branch = self.graph.Branch(self.name, self.head, dict(self.named_heads))
         branch.validate()
         return branch
 
@@ -1224,6 +1228,9 @@ class GitWriter:
         self.grafts[idx] = Graft(c2, c1, c1.tree, ctree)
         self.replaces[c2] = idx
         self.head = c2
+
+        self.graph.add_commit(c2, c1)
+        self.graph.heads = set([self.head])
         return c2
 
     def graft(self, branch, *, fix_tree=None, fix_commit=None):
@@ -1259,6 +1266,7 @@ class GitWriter:
                 c2 = self.repo.write_commit(c1)
                 self.grafts[idx] = Graft(c2, c1, c1.tree, ctree)
                 self.replaces[c2] = idx
+                self.graph.add_commit(c2, c1)
 
             else:
                 graft = self.grafts[idx]
@@ -1268,8 +1276,9 @@ class GitWriter:
 
             graph_count += 1
 
-            if not graph.children[idx]:
+            if idx in graph.heads:
                 new_heads[idx] = c2
+                self.graph.heads.add(c2)
 
             if graph_count & 512 == 0:
                 per = graph_count/graph_total
@@ -1297,13 +1306,13 @@ class GitWriter:
 
 # xxx - Writer
 #       and grafts[] only needs idxs now as the other info is in graph
-
+#
 # xxx - interweave
+#
 #       move named heads to repo_interweave
-#       named_heads to interweave can take named_heads and not just commits
+#         named_heads to interweave can take named_heads and not just commits
 #
 #       interweave can build trees, instead of in graft callback
-#       
 #       interweave can fix commits, instead of in graft callback
 #
 #### future thoughts
