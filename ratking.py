@@ -102,7 +102,7 @@ class GitTree:
 
 @dataclass
 class GitGraph:
-    commits: set
+    commits: dict
     tails: set
     heads: set
     parents: dict
@@ -110,6 +110,19 @@ class GitGraph:
     children: dict
     child_count: dict
     fragments: set
+
+    @classmethod
+    def new(self):
+        return GitGraph(
+            commits={},
+            tails=set(),
+            heads=set(),
+            parents={},
+            parent_count={},
+            children={},
+            child_count={},
+            fragments=set()
+        )
 
     def clone(self):
         return GitGraph(
@@ -149,6 +162,49 @@ class GitGraph:
                 if counts[i] == 0:
                     search.append(i)
 
+    def first_parents(self, head):
+        history = [head]
+        n = head
+
+        while n is not None:
+            p = self.parents.get(n)
+            p = p[0] if p else None
+            if p is None:
+                break
+            history.append(p)
+            n = p
+
+        history.reverse()
+        return history
+
+
+    def add_commit(self, idx, c):
+        if idx in self.commits:
+            return # we added a fragment,
+
+        c_parents = c.parents
+
+        self.commits[idx] = c
+        self.parent_count[idx] = len(c.parents)
+        self.parents[idx] = list(c_parents)
+
+        if not c_parents:
+            self.tails.add(idx)
+
+        if idx not in self.children:
+            self.children[idx] = set()
+            self.child_count[idx] = 0
+
+        for pidx in c_parents:
+            if pidx in self.heads:
+                self.heads.remove(pidx)
+
+            if pidx not in self.children:
+                self.children[pidx] = set()
+            self.children[pidx].add(idx)
+            self.child_count[pidx] = len(self.children[pidx])
+
+
     def add_fragment(self, other):
         for idx in other.commits:
             if idx not in self.commits:
@@ -183,6 +239,63 @@ class GitGraph:
                 self.heads.add(l)
 
         return self
+
+    @classmethod
+    def union(cls, graphs):
+        all_commits = {}
+        all_tails = set()
+        all_heads = set()
+        all_children = {}
+        all_parents = {}
+        all_parent_count = dict()
+        all_child_count = dict()
+        all_fragments = set()
+
+        for name, graph in graphs.items():
+            for idx, c in graph.commits.items():
+                if idx in graph.fragments: # skip fake commit
+                    if idx not in all_commits:
+                        all_fragments.add(idx)
+                    continue
+
+                if idx in all_fragments:
+                    all_fragments.remove(idx)
+
+                if idx not in all_commits:
+                    all_commits[idx] = c
+                    all_parents[idx] = graph.parents[idx]
+                    all_parent_count[idx] = graph.parent_count[idx]
+
+                else:
+                    o = all_commits[idx]
+                    if c != o:
+                        raise Exception("dupe??")
+                    if all_parents[idx] != graph.parents[idx]:
+                        raise Exception("dupe??")
+
+                if idx not in all_children:
+                    all_children[idx] = set()
+                    all_child_count[idx] = 0
+
+                if graph.children[idx]:
+                    all_children[idx].update(graph.children[idx])
+                    all_child_count[idx] = len(all_children[idx])
+                    if idx in all_heads:
+                        all_heads.remove(idx)
+
+            all_tails.update(f for f in graph.tails if f not in graph.fragments)
+            all_heads.update(t for t in graph.heads if not all_children[t])
+
+        return cls(
+            commits = all_commits,
+            tails = all_tails,
+            heads = all_heads,
+            children = all_children,
+            parents = all_parents,
+            parent_count = all_parent_count,
+            child_count = all_child_count,
+            fragments = all_fragments,
+        )
 
     def validate(self):
         # all tails items have no parents
@@ -284,79 +397,6 @@ class GitGraph:
         if walked != set(self.commits):
             print("commits", len(self.commits), "walked", len(walked))
             raise Exception("missing commits")
-
-
-    @classmethod
-    def union(cls, graphs):
-        all_commits = {}
-        all_tails = set()
-        all_heads = set()
-        all_children = {}
-        all_parents = {}
-        all_parent_count = dict()
-        all_child_count = dict()
-        all_fragments = set()
-
-        for name, graph in graphs.items():
-            for idx, c in graph.commits.items():
-                if idx in graph.fragments: # skip fake commit
-                    if idx not in all_commits:
-                        all_fragments.add(idx)
-                    continue
-
-                if idx in all_fragments:
-                    all_fragments.remove(idx)
-
-                if idx not in all_commits:
-                    all_commits[idx] = c
-                    all_parents[idx] = graph.parents[idx]
-                    all_parent_count[idx] = graph.parent_count[idx]
-
-                else:
-                    o = all_commits[idx]
-                    if c != o:
-                        raise Exception("dupe??")
-                    if all_parents[idx] != graph.parents[idx]:
-                        raise Exception("dupe??")
-
-                if idx not in all_children:
-                    all_children[idx] = set()
-                    all_child_count[idx] = 0
-
-                if graph.children[idx]:
-                    all_children[idx].update(graph.children[idx])
-                    all_child_count[idx] = len(all_children[idx])
-                    if idx in all_heads:
-                        all_heads.remove(idx)
-
-            all_tails.update(f for f in graph.tails if f not in graph.fragments)
-            all_heads.update(t for t in graph.heads if not all_children[t])
-
-        return cls(
-            commits = all_commits,
-            tails = all_tails,
-            heads = all_heads,
-            children = all_children,
-            parents = all_parents,
-            parent_count = all_parent_count,
-            child_count = all_child_count,
-            fragments = all_fragments,
-        )
-
-    def first_parents(self, head):
-        history = [head]
-        n = head
-
-        while n is not None:
-            p = self.parents.get(n)
-            p = p[0] if p else None
-            if p is None:
-                break
-            history.append(p)
-            n = p
-
-        history.reverse()
-        return history
 
     def Branch(self, name, head, named_heads):
         history = self.first_parents(head)
@@ -907,70 +947,37 @@ class GitRepo:
         if known is None:
             known = {}
 
-        start = self.get_commit(head)
+        graph = GitGraph.new()
+        graph.heads = set([head])
 
-        commits = {head: start}
-        tails = set()
-        children = {}
-        parents = {}
-        parent_count = {}
-        child_count = {}
-
-        old_parents = {}
         search = [head]
+        walked = set([head])
+
         while search:
             idx = search.pop(0)
 
-            c = commits[idx]
+            c = self.get_commit(idx)
+
             if idx in known:
                 c.parents = []
+                graph.fragments.add(idx)
+
             elif idx in replace_parents:
                 c.parents = list(replace_parents[idx])
                 print("    > replaced", c.parents)
-            c_parents = c.parents
 
-            parent_count[idx] = len(c.parents)
-            parents[idx] = list(c_parents)
+            graph.add_commit(idx, c)
 
-            if not c_parents:
-                tails.add(idx)
-
-            if idx not in children:
-                children[idx] = set()
-                child_count[idx] = 0
-
-            for pidx in c_parents:
-                if pidx not in children:
-                    children[pidx] = set()
-                children[pidx].add(idx)
-                child_count[pidx] = len(children[pidx])
-
-                if pidx not in commits:
-                    p = self.get_commit(pidx)
+            for pidx in c.parents:
+                if pidx not in walked:
                     search.append(pidx)
-                    commits[pidx] = p
+                    walked.add(pidx)
 
-        missing = set(commits) - set(parents)
+        missing = set(walked) - set(graph.parents)
         if missing:
-            print(len(parents), len(commits))
-            print(list(commits)[:10], list(parents)[:10])
-            raise Exception()
+            raise Exception("Missing elements")
 
-        missing = set(commits) - set(children)
-        if missing:
-            print('c',missing)
-            raise Exception()
-
-        return GitGraph(
-            commits = commits,
-            tails = tails,
-            children = children,
-            parents = parents,
-            parent_count = parent_count,
-            child_count = child_count,
-            heads = set([head]),
-            fragments = set(f for f in tails if f in known),
-        )
+        return graph
 
     def get_graph_names(self, graph):
         names = {}
@@ -1283,15 +1290,21 @@ class GitWriter:
         return self.head
 
 ####
+#       get_graph() uses graph.empty() and graph.add_commit
+#       add_fragment uses empty and add commit
+#       union uses add_fragment
+#       graft uses empty and add commit
+
 # xxx - Writer
-#       writer should be BranchWriter
-#       should build and return a graph, now there's no recalculation
-#
+#       and grafts[] only needs idxs now as the other info is in graph
+
 # xxx - interweave
 #       move named heads to repo_interweave
 #       named_heads to interweave can take named_heads and not just commits
 #
 #       interweave can build trees, instead of in graft callback
+#       
+#       interweave can fix commits, instead of in graft callback
 #
 #### future thoughts
 # 
@@ -1305,7 +1318,6 @@ class GitWriter:
 #
 #       i.e. non_linear_depth[x] = {project:n, project:n}
 #       build by walk up from roots, and store a dict of the last 'linear' version of a subtree was
-#
 #
 # xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
 #
