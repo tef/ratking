@@ -1261,12 +1261,19 @@ class GitWriter:
         return self.head
 
 ####
+# xxx - Writer
+#       writer should be BranchWriter
+#       should build and return a graph, now there's no recalculation
+#
+#
 # xxx - interweave
 #       move named heads to repo_interweave
 #       named_heads to interweave can take named_heads and not just commits
 #
-#### merging thoughts
+#### future thoughts
 # 
+# xxx - datetime handling in Signature - @property 
+#
 # xxx - general idea of finer grained merges, file based or subdirectory based
 #
 #       non linear parents? i.e i tag each tail with which repo it comes from
