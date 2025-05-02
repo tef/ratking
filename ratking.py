@@ -33,6 +33,34 @@ def glob_match(pattern, string):
     rx = compile_pattern(pattern)
     return rx.match(string) is not None
 
+@dataclass
+class GitSignature:
+    name: str
+    email: str
+    time: int
+    offset: int
+
+    def replace(self, name=None, email=None, time=None, offset=None):
+        return GitSignature(
+            name = name if name else self.name,
+            email = email if email else self.email,
+            time = time if time else self.time,
+            offset = offset if offset else self.offset,
+        )
+
+    def to_pygit(self):
+        #time = int(self.date.timestamp())
+        #offset = int(self.date.tzinfo.utcoffset(None).total_seconds()) // 60
+        return pygit2.Signature(name=self.name, email=self.email, time=self.time, offset=self.offset)
+
+    def __str__(self):
+        return f"{self.name} <{self.email}>"
+
+    @classmethod
+    def from_pygit(self, obj):
+        #tz = timezone(timedelta(minutes=obj.offset))
+        #date = datetime.fromtimestamp(float(obj.time), tz)
+        return GitSignature(name=obj.name, email=obj.email, time=obj.time, offset=obj.offset)
 
 @dataclass
 class GitCommit:
@@ -181,7 +209,7 @@ class GitGraph:
                 if len(m) != 1 or m[0] != idx:
                     #print(c.parents, m)
                     print("parent commit", idx)
-                    print("child commit", child, "parents", c.parents)
+                    print("child commit", child, "parents", self.parents[idx])
                     raise Exception("child listed, not in parent")
 
         # validate parents
@@ -630,9 +658,6 @@ class GitBranch:
 
             all_named_heads[point_name] = merge_point
 
-
-        # create map of commit prefixes
-
         branch = GitBranch(
                 name = name,
                 graph = merged_graph,
@@ -701,12 +726,19 @@ class GitRepo:
 
         tree = str(obj.tree_id)
 
+        author = GitSignature.from_pygit(obj.author)
+        committer = GitSignature.from_pygit(obj.committer)
+        message = obj.message
+
+        if author.to_pygit() != obj.author:
+            raise Exception("wait")
+
         return GitCommit(
                 tree = tree,
                 parents = list(str(x) for x in obj.parent_ids),
-                author=obj.author,
-                committer=obj.committer,
-                message = obj.message,
+                author=author,
+                committer=committer,
+                message = message,
                 max_date = max(a_date, c_date),
                 author_date = a_date,
                 committer_date = c_date,
@@ -735,7 +767,11 @@ class GitRepo:
         else:
             raise Exception('bad')
         parents = [pygit2.Oid(hex=p) for p in c.parents]
-        out = self.git.create_commit(None, c.author, c.committer, c.message, tree, parents)
+        author = c.author.to_pygit()
+        committer = c.committer.to_pygit()
+        out = self.git.create_commit(None, author, committer, c.message, tree, parents)
+        if not out:
+            raise Exception("what")
         return str(out)
 
     def write_tree(self, t):
@@ -754,8 +790,10 @@ class GitRepo:
         return str(out)
 
     def write_empty_commit(self, name, email, timestamp, message):
-        signature = pygit2.Signature(name, email, int(timestamp.timestamp()), 0, "utf-8")
-        ts = timestamp.astimezone(timezone.utc),
+        if timestamp.tzinfo is None:
+            raise Exception("needs timestamp")
+        ts = timestamp.astimezone(timezone.utc)
+        signature = GitSignature(name, email, int(ts.timestamp()), 0)
         c = GitCommit(
                 tree = GIT_EMPTY_TREE,
                 parents=[],
@@ -1224,13 +1262,8 @@ class GitWriter:
 
 ####
 # xxx - interweave
-#       merge histories takes branches, not history
-#       maybe get rid of linear depth on branch, and move it into interweave fullty
-#
-# xxx - named_heads to interweave can take named_heads and not just commits
-
-#       branch.new_head()
-#       branch.new_tail(tail, head)
+#       move named heads to repo_interweave
+#       named_heads to interweave can take named_heads and not just commits
 #
 #### merging thoughts
 # 
