@@ -388,7 +388,7 @@ class GitBranch:
 
         for name, idx in self.named_heads.items():
             if idx not in graph.commits:
-                raise Exception("missing head")
+                raise Exception(f"missing head: {name}")
 
         if self.head not in graph.commits:
             raise Exception("missing head")
@@ -553,10 +553,7 @@ class GitBranch:
         return new_history
 
     @classmethod
-    def interweave(cls, name, branches, named_heads=None):
-        if named_heads is None:
-            named_heads = {}
-
+    def interweave(cls, name, branches, named_heads=None, merge_named_heads=()):
         graphs = {k:v.graph for k,v in branches.items()}
         merged_graph = GitGraph.union(graphs)
 
@@ -661,8 +658,17 @@ class GitBranch:
                     raise Exception("bad")
 
         # create the merged branch
+        # find all merge points passed in, passed { "named head" : {"upstream name":"commit id"}}
 
-        # find all merge points passed in, passed { "name of commit" : {"upstream name":"commit id"}}
+        named_heads = {} if named_heads is None else named_heads
+        merge_named_heads = () if merge_named_heads is None else merge_named_heads
+
+        for point_name in merge_named_heads:
+            mp = {}
+            for name, branch in branches.items():
+                if point_name in branch.named_heads:
+                    mp[name] = branch.named_heads[point_name]
+            named_heads[point_name] = mp
 
         for point_name, merge_points in named_heads.items():
 
@@ -682,6 +688,7 @@ class GitBranch:
                         raise Exception("can't make merge point")
 
             all_named_heads[point_name] = merge_point
+
 
         # create map of commit prefixes
 
@@ -993,6 +1000,9 @@ class GitRepo:
         return names
 
     def clean_tree(self, addr, old_tree, bad_files):
+        if bad_files == None:
+            return addr, old_tree
+
         entries = []
         dropped = False
         for i in old_tree.entries:
@@ -1024,6 +1034,7 @@ class GitRepo:
 
 
     def clean_branch(self, branch, bad_files):
+        branch.validate()
         writer = GitWriter(self, None)
 
         def fix_tree(idx, tree, ctree):
@@ -1032,10 +1043,15 @@ class GitRepo:
 
         writer.graft(branch, fix_tree=fix_tree, fix_commit=None)
 
-        return writer.to_branch(branch.name)
+        for k,v in writer.named_heads.items():
+            self.get_commit(v)
 
-    def interweave_branches(self, name, branches, named_heads=None, fix_commit=None, bad_files=None):
-        branch, prefix = GitBranch.interweave(name, branches, named_heads=named_heads)
+        branch = writer.to_branch(branch.name)
+        branch.validate()
+        return branch
+
+    def interweave_branches(self, name, branches, named_heads=None, merge_named_heads=None, fix_commit=None):
+        branch, prefix = GitBranch.interweave(name, branches, named_heads=named_heads, merge_named_heads=merge_named_heads)
 
         # XXX
         # writer= self.Writer(None)
@@ -1044,8 +1060,8 @@ class GitRepo:
         return branch, prefix
 
 
-    def Writer(self, init, tree=None, named_heads=None):
-        return GitWriter(self, init, tree, named_heads)
+    def Writer(self, head=None):
+        return GitWriter(self, head)
 
 
 
@@ -1058,10 +1074,9 @@ class Graft:
 
 
 class GitWriter:
-    def __init__(self, repo, head, tree=None, named_heads=None):
+    def __init__(self, repo, head, named_heads=None):
         self.repo = repo
-        self.head = head
-        self.tree = tree
+        self.head = head # maybe support multiple heads as parents
         self.named_heads = named_heads if named_heads else {}
         self.grafts = {}
 
@@ -1075,7 +1090,14 @@ class GitWriter:
 
     def to_branch(self, name):
         graph = self.repo.get_graph(self.head)
-        return graph.Branch(name, self.head, self.named_heads)
+        graph.validate()
+        for k,v in self.named_heads.items():
+            fragment = self.repo.get_graph(v, known=graph.commits)
+            graph.add_fragment(fragment)
+        branch = graph.Branch(name, self.head, dict(self.named_heads))
+
+        branch.validate()
+        return branch
 
     def prefix_tree(self, tree, prefix):
         entries = []
@@ -1127,7 +1149,7 @@ class GitWriter:
 
             c1 = GitCommit(
                     tree=tidx,
-                    parents=[prev],
+                    parents=([prev] if prev else []),
                     author=author,
                     committer=committer,
                     message = message,
@@ -1139,8 +1161,9 @@ class GitWriter:
             prev = self.repo.write_commit(c1)
         return prev
 
+
     def graft_prefix(self, branch, graph_prefix, bad_files, fix_commit):
-        start_tree = self.tree if self.tree else GitTree([])
+        start_tree = GitTree([])
         graph = branch.graph
 
         def prefix_tree(idx, tree, ctree):
@@ -1149,8 +1172,6 @@ class GitWriter:
                 prefix = prefix[idx]
             if prefix and not isinstance(prefix, set):
                 raise Exception("bad prefix, must be set or dict of set")
-
-            tree, ctree = self.repo.clean_tree(tree, ctree, bad_files)
 
             if idx in graph.tails:
                 tree, ctree = self.merge_tree(start_tree, tree, prefix)
@@ -1171,6 +1192,28 @@ class GitWriter:
 
         return self.graft(branch, prefix_tree, prefix_commit)
 
+    def graft_commit(self, idx, fix_tree=None, fix_commit=None):
+        start_parents = [self.head] if self.head else []
+
+        c1 = self.repo.get_commit(idx)
+        ctree = self.repo.get_tree(c1.tree)
+
+        if not c1.parents:
+            c1.parents = start_parents
+        else:
+            c1.parents = [self.grafts[p].idx for p in c1.parents[idx]]
+        
+        if fix_tree is not None:
+            c1.tree, ctree = fix_tree(idx, c1.tree, ctree)
+
+        if fix_commit is not None:
+            c1.author, c1.committer, c1.message = fix_commit(idx, c1)
+
+        c2 = self.repo.write_commit(c1)
+        self.grafts[idx] = Graft(c2, c1, c1.tree, ctree)
+        self.head = c2
+        return c2
+
     def graft(self, branch, fix_tree, fix_commit):
         start_parents = [self.head] if self.head else []
 
@@ -1190,7 +1233,7 @@ class GitWriter:
                 c1 = graph.commits[idx]
                 ctree = self.repo.get_tree(c1.tree)
 
-                if idx in graph.tails:
+                if not c1.parents:
                     c1.parents = start_parents
                 else:
                     c1.parents = [self.grafts[p].idx for p in graph.parents[idx]]
@@ -1228,21 +1271,21 @@ class GitWriter:
 
         self.head = self.grafts[branch.head].idx
         self.named_heads.update({k: self.grafts[v].idx for k,v in branch.named_heads.items()})
+
+        for k,v in self.named_heads.items():
+            self.repo.get_commit(v)
         return self.head
 
 ####
-#   xxx: moving merge tree logic out of graft and into interweave
-#   - does interweave return a written branch, or a branch with mutated commits and trees
-#  
+#       clean branches before merging them
+#       use interweave to prefix portal, etc
+#       don't pass in bad files or fix commit/prefix to graft, but to interweave
 #
-#
-#
+#       used named_heads to capture grafted changes
 
 
 
 #### todo
-#       repo.clean_branch(branch, bad_files)      
-#       
 #       repo.interweave(branches, bad_files, fix_message) 
 #           calls branch interweave, then calls graft
 #           branch.interweave creates prefixed trees 
