@@ -131,7 +131,7 @@ class GitGraph:
             c = search.pop(0)
             yield c
 
-            for i in self.children[c]:
+            for i in sorted(self.children[c], key=lambda x: self.commits[x].max_date):
                 counts[i] -= 1
                 if counts[i] == 0:
                     search.append(i)
@@ -1033,7 +1033,7 @@ class GitRepo:
 
 
     def clean_branch(self, branch, bad_files):
-        writer = GitWriter(self)
+        writer = GitWriter(self, branch.name)
 
         def fix_tree(writer, idx, tree, ctree):
             tree, ctree = self.clean_tree(tree, ctree, bad_files)
@@ -1041,11 +1041,11 @@ class GitRepo:
 
         writer.graft(branch, fix_tree=fix_tree, fix_commit=None)
 
-        branch = writer.to_branch(branch.name)
+        branch = writer.to_branch()
         return branch
 
     def prefix_branch(self, branch, prefix):
-        writer = GitWriter(self)
+        writer = GitWriter(self, branch.name)
 
         def fix_tree(writer, idx, tree, ctree):
             tree, ctree = self.prefix_tree(tree, ctree, [prefix])
@@ -1053,7 +1053,7 @@ class GitRepo:
 
         writer.graft(branch, fix_tree=fix_tree, fix_commit=None)
 
-        branch = writer.to_branch(branch.name)
+        branch = writer.to_branch()
         return branch
 
     def interweave_branch_heads(self, branches, bad_files, fix_commit):
@@ -1111,7 +1111,7 @@ class GitRepo:
 
         merged_branch, linear_parent = GitBranch.interweave(name, branches, named_heads=named_heads, merge_named_heads=merge_named_heads)
 
-        writer = GitWriter(self)
+        writer = GitWriter(self, name)
         start_tree = GitTree([])
         graph = merged_branch.graph
         
@@ -1150,12 +1150,12 @@ class GitRepo:
 
         writer.graft(merged_branch, fix_tree=prefix_tree, fix_commit=prefix_commit)
 
-        new_branch = writer.to_branch(name)
+        new_branch = writer.to_branch()
         return new_branch
 
 
-    def Writer(self):
-        return GitWriter(self)
+    def Writer(self, name):
+        return GitWriter(self, name)
 
 
 
@@ -1168,8 +1168,9 @@ class Graft:
 
 
 class GitWriter:
-    def __init__(self, repo, head=None, named_heads=None):
+    def __init__(self, repo, name, head=None, named_heads=None):
         self.repo = repo
+        self.name = name
         self.head = head # maybe support multiple heads as parents
         self.named_heads = named_heads if named_heads else {}
         self.grafts = {}
@@ -1183,14 +1184,14 @@ class GitWriter:
             out = {k:v.idx for k,v in self.grafts.items}
             json.dump(out, fh, sort_keys=True, indent=2)
 
-    def to_branch(self, name):
+    def to_branch(self):
         # XXX -  BUILD A GRAPH
         graph = self.repo.get_graph(self.head)
         for k,v in self.named_heads.items():
             fragment = self.repo.get_graph(v, known=graph.commits)
             graph.add_fragment(fragment)
 
-        branch = graph.Branch(name, self.head, dict(self.named_heads))
+        branch = graph.Branch(self.name, self.head, dict(self.named_heads))
 
         branch.validate()
         return branch
