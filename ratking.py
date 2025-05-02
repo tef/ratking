@@ -1250,12 +1250,12 @@ class GitWriter:
             if not graph.children[idx]:
                 new_heads[idx] = c2
 
-            if graph_count & 256 == 0:
+            if graph_count & 512 == 0:
                 per = graph_count/graph_total
-                print(f"\r    progress {per:.2%} {graph_count} of {graph_total}", end="")
+                print(f"\r    > progress {per:.2%} {graph_count} of {graph_total}", end="")
 
         per = graph_count/graph_total
-        print(f"\r    progress {per:.2%} {graph_count} of {graph_total}")
+        print(f"\r    > progress {per:.2%} {graph_count} of {graph_total}")
 
         for x in graph.commits:
             if x not in self.grafts:
@@ -1271,33 +1271,29 @@ class GitWriter:
 ####
 #       fix the report, use named_heads to capture grafted changes
 #       
+# xxx - shallow merge uses a proper writer and stores grafts
+#       maybe calls branch.interweave_heads(....)
+#
+# xxx - interweave
 #       merge histories takes branches, not history
 #       maybe get rid of linear depth on branch, and move it into interweave fullty
+#
+# xxx - named_heads to interweave can take named_heads and not just commits
 
 
 #### todo
-#       repo.interweave(branches, bad_files, fix_message) 
-#
 #       branch.new_head()
 #       branch.new_tail(tail, head)
 #
 #       repo.prefix_branch
 #           take and return a new branch, saved
 #       
-#       clean_tree/prefix take and return GitTree??
-#
-# xxx - shallow merge is a proper writer and stores grafts
-#       maybe calls branch.interweave_heads(....)
-#
-# xxx - named_heads to interweave can take named_heads and not just commits
-#
 # xxx - Processor()
 #       fold mkrepo.py up into more general class
 # xxx - GitGraph
 #       graph.properties = set([monotonic, monotonic-author, monotonic-committer])
 #
 # xxx - preserving old commit names in headers / changes
-#
 
 
 #### merging thoughts
