@@ -206,25 +206,24 @@ class GitGraph:
 
     def add_fragment(self, other):
         for idx in other.commits:
-            if idx not in self.commits:
+            if idx not in self.commits or idx in self.fragments:
                 c = other.commits[idx]
-                self.commits[idx] = c
-                self.parents[idx] = other.parents[idx]
-                self.parent_count[idx] = other.parent_count[idx]
-                for p in self.parents[idx]:
-                    if p in self.heads:
-                        self.heads.remove(p)
+                self.add_commit(idx, c)
+                if idx in other.fragments:
+                    self.fragments.add(idx)
+                elif idx in self.fragments:
+                    self.fragments.remove(idx)
             else:
                 if idx not in other.fragments:
                     raise Exception("nope")
 
-            if idx not in self.children:
-                self.children[idx] = set()
-                self.child_count[idx] = 0
+                if idx not in self.children:
+                    self.children[idx] = set()
+                    self.child_count[idx] = 0
 
-            for c in other.children[idx]:
-                self.children[idx].add(c)
-                self.child_count[idx] = len(self.children[idx])
+                for c in other.children[idx]:
+                    self.children[idx].add(c)
+                    self.child_count[idx] = len(self.children[idx])
 
         for f in other.tails:
             # xxx don't merge in graphs with new init commits
@@ -241,6 +240,8 @@ class GitGraph:
 
     @classmethod
     def union(cls, graphs):
+        all_graphs = cls.new()
+
         all_commits = {}
         all_tails = set()
         all_heads = set()
