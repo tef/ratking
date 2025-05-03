@@ -579,7 +579,7 @@ class GitBranch:
         return new_history, branch_history, branch_linear_parent, merged_graph
 
     @classmethod
-    def interweave(cls, name, branches, named_heads=None, merge_named_heads=()):
+    def interweave(cls, new_name, branches, named_heads=None, merge_named_heads=()):
 
         # create a new linear history
         history, branch_history, branch_linear_parent, merged_graph = (
@@ -713,7 +713,7 @@ class GitBranch:
                     raise Bug("Conflicting rewrites")
 
         branch = GitBranch(
-            name=name,
+            name=new_name,
             graph=merged_graph,
             head=head,
             tail=tail,
@@ -923,7 +923,7 @@ class GitRepo:
         named_heads = {branch_name: branch_head}
 
         branch = branch_graph.to_branch(
-            name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads,
+            name=branch_name, head=branch_head, named_heads=named_heads,
             original={},
         )
 
@@ -1118,7 +1118,7 @@ class GitRepo:
         return prev
 
     def interweave_branches(
-        self, name, branches, named_heads=None, merge_named_heads=None, fix_commit=None
+        self, new_name, branches, named_heads=None, merge_named_heads=None, fix_commit=None
     ):
         graph_prefix = {}
         for name, branch in branches.items():
@@ -1128,10 +1128,10 @@ class GitRepo:
                 graph_prefix[c].add(name)
 
         merged_branch, linear_parent = GitBranch.interweave(
-            name, branches, named_heads=named_heads, merge_named_heads=merge_named_heads
+            new_name, branches, named_heads=named_heads, merge_named_heads=merge_named_heads
         )
 
-        writer = GitWriter(self, name)
+        writer = GitWriter(self, new_name)
         start_tree = GitTree([])
         graph = merged_branch.graph
         grafted_trees = {}
@@ -1180,6 +1180,7 @@ class GitRepo:
             if writer.grafted(x) != y:
                 raise Bug("Grafted branch out of sync with input branch")
 
+
         check_branch = self.interweave_branch_heads(branches, fix_commit=fix_commit)
         shallow_c = self.get_commit(check_branch)
         output_c = self.get_commit(new_branch.head)
@@ -1195,7 +1196,6 @@ class GitRepo:
         if shallow_c.message != output_c.message:
             raise Bug("Branch head inconsistent")
         # parents will not match
-
         return new_branch
 
     def Writer(self, name):
@@ -1222,7 +1222,9 @@ class GitWriter:
             json.dump(out, fh, sort_keys=True, indent=2)
 
     def to_branch(self):
-        branch = self.graph.to_branch(self.name, self.head, dict(self.named_heads), original=self.original)
+        named_heads = dict(self.named_heads)
+        named_heads[self.name] = self.head
+        branch = self.graph.to_branch(self.name, self.head, named_heads, original=self.original)
         branch.validate()
         return branch
 
@@ -1310,7 +1312,7 @@ class GitWriter:
 
         self.head = self.grafts[branch.head]
         self.named_heads.update(
-            {k: self.grafts[v] for k, v in branch.named_heads.items()}
+            {k: self.grafts[v] for k, v in branch.named_heads.items() if k != branch.name}
         )
 
         for k, v in self.named_heads.items():
@@ -1439,12 +1441,15 @@ class GitBuilder:
 
 
 #### future thoughts
-# xxx - fix names as a callback
-# xxx - graft takes list of callbacks, remove fix_message, fix_commit
+# xxx - adding origin as step
+# xxx - writing output as option for steps
+# xxx - writing report as step - include named heads
+
+# xxx - fix names as a callback, separate from fix_commit
+# xxx - bad_files uses a callback
+# xxx - fix_message uses a callback
 #
 # xxx - datetime handling in Signature - @property
-#
-# xxx - report shows original and not cleaned commits
 #
 
 #### one day
