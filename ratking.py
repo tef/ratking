@@ -740,6 +740,8 @@ class AuthCallbacks(pygit2.RemoteCallbacks):
 
 class GitRepo:
     def __init__(self, repo_dir):
+        if not repo_dir.endswith(".git"):
+            repo_dir += ".git"
         self.git = pygit2.init_repository(repo_dir, bare=True)
         self._all_remotes = None
 
@@ -1335,9 +1337,13 @@ class GitBuilder:
         if refresh:
             self.fetched = set()
 
+        # XXX -toposort
         for name, config in steps.items():
             step = config["step"]
-            if step == "fetch_branch":
+            if step == "add_remote":
+                config["refresh"] = refresh
+                self.add_remote(name, config)
+            elif step == "fetch_branch":
                 config["refresh"] = refresh
                 self.fetch_branch(name, config)
             elif step == "start_branch":
@@ -1350,12 +1356,29 @@ class GitBuilder:
                 self.show_branch(name, config)
             elif step == "write_branch":
                 self.write_branch(name, config)
+            elif step == "write_branch_names":
+                self.write_branch_names(name, config)
             else:
-                raise Bug(f"Bad step: {name}")
+                raise Bug(f"Bad step for {name}: {step}")
             self.report()
 
-        self.report()
         return self.branches
+
+    def add_remote(self, name, config):
+        remote_name = config.get("name", name)
+        url = config["url"]
+        refresh = config["refresh"]
+
+        self.report("adding remote", f"{remote_name}")
+        created = self.repo.add_remote(remote_name, url)
+        if created or refresh:
+            self.report(f"    fetching {remote_name} from {url}", end="")
+            if url not in self.fetched:
+                self.repo.fetch_remote(remote_name)
+                self.fetched.add(url)
+            self.report()
+        else:
+            self.report(f"    already fetched {remote_name} from {url}")
 
     def fetch_branch(self, name, config):
         branch_name = config["default_branch"]
@@ -1503,9 +1526,28 @@ class GitBuilder:
             self.repo.write_branch_head(f"{prefix}/{name}", head)
             count +=1
 
-        self.report(f"writing {branch_name} to {prefix}{branch_name}")
+        self.report(f"writing branch '{branch_name}' to '{prefix}{branch_name}'")
         if count or skipped:
             self.report("   ", f"plus {count} branches, skipping {skipped}")
+
+    def write_branch_names(self, name, config):
+        branch_name = config['branch']
+        branch = self.branches[branch_name]
+
+        output_filename = config['output_filename']
+        self.report("writing name list", end="")
+
+        names = self.repo.get_branch_names(branch)
+        name_list = names.keys()
+
+        self.report(",", len(name_list), "unique names", end="")
+
+        with open(output_filename, "w") as fh:
+            for name in sorted(name_list):
+                fh.write(f"{name}\n")
+
+        self.report()
+
 
 
 
@@ -1516,8 +1558,7 @@ class GitBuilder:
 
 #### future thoughts
 # xxx - adding origin as step
-# xxx - writing output as option for steps / output step with list of branches and include/exclude
-# xxx - writing report as step - include named heads
+# xxx - writing names as a step
 
 # xxx - fix names as a callback, separate from fix_commit
 # xxx - bad_files uses a callback
