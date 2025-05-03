@@ -29,8 +29,10 @@ def compile_pattern(pattern):
 
 
 def glob_match(pattern, string):
-    if pattern is None:
-        return None
+    if not pattern:
+        return False
+    if pattern is True:
+        return True
     rx = compile_pattern(pattern)
     return rx.match(string) is not None
 
@@ -288,7 +290,7 @@ class GitGraph:
             children = self.children[idx]
             if not children:
                 if idx not in self.heads:
-                    raise ("untracked head")
+                    raise Exception("untracked head")
             for child in children:
                 if child not in inverted_children:
                     inverted_children[child] = set()
@@ -369,11 +371,6 @@ class GitGraph:
             if new_date < date:
                 raise Exception("time travel")
 
-        linear_parent = GitBranch.make_linear_parent(history, self.tails, self.children)
-
-        if set(self.commits) != set(linear_parent):
-            raise Exception(f"bad {len(self.commits)} {len(linear_parent)}")
-
         return GitBranch(
             name=name,
             head=head,
@@ -438,6 +435,8 @@ class GitBranch:
             raise Exception("what")
         if history[-1] != self.head:
             raise Exception("how")
+        if history[0] != self.tail:
+            raise Exception("bad tail")
 
     def add_named_fragment(self, name, head, other):
         graph = self.graph
@@ -842,7 +841,10 @@ class GitRepo:
         )
 
         head = self.write_commit(c)
-        graph = self.get_graph(head)  # XXX - build a graph from the commit
+
+        graph = GitGraph.new()
+        graph.add_commit(head, c)
+        graph.heads = set([head])
         named_heads = {branch_name: head}
 
         branch = graph.to_branch(branch_name, head, named_heads)
@@ -910,19 +912,6 @@ class GitRepo:
 
         branch.validate()
         return branch
-
-    def get_fragment(self, head):
-        init = self.get_commit(head)
-        return GitGraph(
-            commits={head: init},
-            heads=set([head]),
-            tails=set([head]),
-            children={head: set()},
-            parents={head: set()},
-            parent_count={head: 0},
-            child_count={head: 0},
-            fragments=set([head]),
-        )
 
     def get_graph(self, head, replace_parents=None, known=None):
         if replace_parents is None:
@@ -1021,7 +1010,7 @@ class GitRepo:
         t = GitTree(entries)
         return self.repo.write_tree(t), t
 
-    def clean_branch(self, branch, bad_files):
+    def rewrite_branch(self, branch, bad_files=None):
         writer = GitWriter(self, branch.name)
         branch.validate()
 
@@ -1032,11 +1021,11 @@ class GitRepo:
         writer.graft(branch, fix_tree=fix_tree, fix_commit=None)
 
         new_branch = writer.to_branch()
-        # print("XXX", len(new_branch.graph.commits), len(branch.graph.commits), len(writer.grafts))
 
         for x, y in zip(branch.graph.walk_children(), new_branch.graph.walk_children()):
             if writer.grafted(x) != y:
-                print("oooo")
+                raise Exception("bad")
+
         return new_branch
 
     def prefix_branch(self, branch, prefix):
@@ -1048,8 +1037,11 @@ class GitRepo:
 
         writer.graft(branch, fix_tree=fix_tree, fix_commit=None)
 
-        branch = writer.to_branch()
-        return branch
+        new_branch = writer.to_branch()
+        for x, y in zip(branch.graph.walk_children(), new_branch.graph.walk_children()):
+            if writer.grafted(x) != y:
+                raise Exception("bad")
+        return new_branch
 
     def interweave_branch_heads(self, branches, bad_files, fix_commit):
         heads = []
@@ -1162,7 +1154,8 @@ class GitRepo:
             merged_branch.graph.walk_children(), new_branch.graph.walk_children()
         ):
             if writer.grafted(x) != y:
-                print("oooo")
+                raise Exception("bad")
+
         return new_branch
 
     def Writer(self, name):
@@ -1188,16 +1181,6 @@ class GitWriter:
             json.dump(out, fh, sort_keys=True, indent=2)
 
     def to_branch(self):
-        # XXX -  BUILD A GRAPH
-        graph = self.repo.get_graph(self.head)
-
-        for k, v in self.named_heads.items():
-            fragment = self.repo.get_graph(v, known=graph.commits)
-            graph.add_graph(fragment)
-
-        # print("XXX", "new graph has ", len(graph.commits), "built graph", len(self.graph.commits))
-
-        self.graph.validate()
         branch = self.graph.to_branch(self.name, self.head, dict(self.named_heads))
         branch.validate()
         return branch
@@ -1288,14 +1271,18 @@ class GitWriter:
 
 
 #### future thoughts
-#
+# xxx - repo.rewrite_branch(...)
+# xxx - branch.originally= []
+# xxx - move shallow head check inside repo.interweave
+# xxx - fix names as a callback
+# xxx - graft takes list of callbacks
+
 # xxx - datetime handling in Signature - @property
 #
-# xxx - general idea of finer grained merges, file based or subdirectory based
+# xxx - Processor()
+#       fold mkrepo.py up into more general class
 #
-#       non linear parents? i.e i tag each tail with which repo it comes from
-#       and inherit that, i.e n linear parents across all graphs
-#       and i can combine "this subdirectory from this root"
+# xxx - general idea of finer grained merges, file based or subdirectory based
 #
 #       i.e. non_linear_depth[x] = {project:n, project:n}
 #       build by walk up from roots, and store a dict of the last 'linear' version of a subtree was
@@ -1304,9 +1291,6 @@ class GitWriter:
 #
 # xxx - merging with other histories other than linear
 #       and maybe not merging by replacing the first parent
-#
-# xxx - Processor()
-#       fold mkrepo.py up into more general class
 #
 # xxx - GitGraph
 #       graph.properties = set([monotonic, monotonic-author, monotonic-committer])
