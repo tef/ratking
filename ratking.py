@@ -1170,15 +1170,17 @@ class GitRepo:
 
             return commit, ctree
 
-        def prefix_commit(writer, idx, commit):
+        def prefix_commit(writer, idx, commit, ctree):
             prefix = graph_prefix
             if isinstance(prefix, dict):
                 prefix = prefix[idx]
             if prefix and not isinstance(prefix, set):
                 raise Bug("bad prefix, must be set or dict of set")
-            return fix_commit(commit, ", ".join(sorted(prefix)))
+            output = fix_commit(commit, ", ".join(sorted(prefix)))
+            commit.author, commit.committer, commit.message = output
+            return commit, ctree
 
-        writer.graft(merged_branch, rewrite=(prefix_tree,), fix_commit=prefix_commit)
+        writer.graft(merged_branch, rewrite=(prefix_tree, prefix_commit))
 
         new_branch = writer.to_branch()
 
@@ -1237,7 +1239,7 @@ class GitWriter:
         branch.validate()
         return branch
 
-    def graft_commit(self, idx, rewrite=(), fix_commit=None):
+    def graft_commit(self, idx, rewrite=()):
         start_parents = [self.head] if self.head else []
 
         c = self.repo.get_commit(idx)
@@ -1251,10 +1253,6 @@ class GitWriter:
         for callback in rewrite:
             c, ctree = callback(self, idx, c, ctree)
 
-        if fix_commit is not None:
-            c.author, c.committer, c.message = fix_commit(self, idx, c)
-
-
         cidx = self.repo.write_commit(c)
         self.grafts[idx] = cidx
         self.replaces[cidx] = idx
@@ -1264,7 +1262,7 @@ class GitWriter:
         self.graph.heads = set([self.head])
         return cidx
 
-    def graft(self, branch, *, rewrite=(), fix_commit=None, report=print):
+    def graft(self, branch, *, rewrite=(), report=print):
         start_parents = [self.head] if self.head else []
 
         graph = branch.graph
@@ -1286,9 +1284,6 @@ class GitWriter:
 
                 for callback in rewrite:
                     c, ctree = callback(self, idx, c, ctree)
-
-                if fix_commit is not None:
-                    c.author, c.committer, c.message = fix_commit(self, idx, c)
 
                 cidx = self.repo.write_commit(c)
                 self.grafts[idx] = cidx
@@ -1576,7 +1571,9 @@ class GitBuilder:
 
 
 #### future thoughts
+# xxx -
 # xxx - fix names as a callback, separate from fix_commit
+#
 # xxx - fix_message uses a callback
 #
 # xxx - work out how to 'de special' fix_message
