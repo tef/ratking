@@ -1000,8 +1000,8 @@ class GitRepo:
         dropped = False
         for i in old_tree.entries:
             name = i[1]
-            bad = bad_files.get(name, None)
-            if bad is None:
+            bad = bad_files.get(name, False)
+            if bad is False:
                 entries.append(i)
             elif callable(bad):
                 out = bad(i[0], i[1], i[2])
@@ -1017,9 +1017,11 @@ class GitRepo:
                 if new_addr != i[2]:
                     entries.append((i[0], i[1], new_addr))
                     dropped = True
-            else:
+            elif bad is True:
                 dropped = True
                 pass  # delete it, if it's an empty hash
+            else:
+                raise Bug("Bad value in bad_files")
         if not dropped:
             return addr, old_tree
         new_tree = GitTree(entries)
@@ -1329,6 +1331,7 @@ class GitBuilder:
         self.fetched = set()
         self.branches = {}
         self.report = report
+        self.loaded = {}
 
         # XXX self.stdout
         # XXX def report(self, ...)
@@ -1363,6 +1366,22 @@ class GitBuilder:
             self.report()
 
         return self.branches
+
+    def load_json(self, filename):
+        if filename in self.loaded:
+            return self.loaded[filename]
+        with open(filename, "r+") as fh:
+            out = json.load(fh)
+
+        self.loaded[filename] = out
+        return out
+
+    def load_badfiles(self, bad_files):
+        if isinstance(bad_files, dict):
+            return bad_files
+
+        out = self.load_json(bad_files)
+        return out
 
     def add_remote(self, name, config):
         remote_name = config.get("name", name)
@@ -1430,7 +1449,8 @@ class GitBuilder:
 
         if "bad_files" in config:
             self.report("    cleaning branch")
-            branch = self.repo.rewrite_branch(branch, config["bad_files"])
+            bad_files = self.load_badfiles(config["bad_files"])
+            branch = self.repo.rewrite_branch(branch, bad_files=bad_files)
 
         self.branches[name] = branch
 
@@ -1557,11 +1577,8 @@ class GitBuilder:
 
 
 #### future thoughts
-# xxx - adding origin as step
-# xxx - writing names as a step
-
-# xxx - fix names as a callback, separate from fix_commit
 # xxx - bad_files uses a callback
+# xxx - fix names as a callback, separate from fix_commit
 # xxx - fix_message uses a callback
 #
 # xxx - work out how to 'de special' fix_message
