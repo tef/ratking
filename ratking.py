@@ -1079,7 +1079,7 @@ class GitRepo:
                     commit.message,
                 )
 
-            c1 = GitCommit(
+            c = GitCommit(
                 tree=tidx,
                 parents=([prev] if prev else []),
                 author=author,
@@ -1090,7 +1090,7 @@ class GitRepo:
                 committer_date=commit.committer_date,
             )
 
-            prev = self.write_commit(c1)
+            prev = self.write_commit(c)
         return prev
 
     def interweave_branches(
@@ -1188,30 +1188,31 @@ class GitWriter:
     def graft_commit(self, idx, fix_tree=None, fix_commit=None):
         start_parents = [self.head] if self.head else []
 
-        c1 = self.repo.get_commit(idx).clone()
-        c1.tree, ctree = self.repo.get_tree(c1.tree)
+        c = self.repo.get_commit(idx).clone()
+        c.tree, ctree = self.repo.get_tree(c.tree)
 
-        if not c1.parents:
-            c1.parents = start_parents
+        if not c.parents:
+            c.parents = start_parents
         else:
-            c1.parents = [self.grafts[p] for p in c1.parents[idx]]
+            c.parents = [self.grafts[p] for p in c.parents[idx]]
 
         if fix_tree is not None:
-            c1.tree, ctree = fix_tree(self, idx, c1.tree, ctree)
+            c.tree, ctree = fix_tree(self, idx, c.tree, ctree)
 
         if fix_commit is not None:
-            c1.author, c1.committer, c1.message = fix_commit(self, idx, c1)
+            c.author, c.committer, c.message = fix_commit(self, idx, c)
 
-        c2 = self.repo.write_commit(c1)
-        self.grafts[idx] = c2
-        self.replaces[c2] = idx
-        self.head = c2
+        cidx = self.repo.write_commit(c)
+        self.grafts[idx] = cidx
+        self.replaces[cidx] = idx
 
-        self.graph.add_commit(c2, c1)
+        self.graph.add_commit(cidx, c)
+
+        self.head = cidx
         self.graph.heads = set([self.head])
-        return c2
+        return cidx
 
-    def graft(self, branch, *, fix_tree=None, fix_commit=None):
+    def graft(self, branch, *, rewrite=(), fix_tree=None, fix_commit=None):
         start_parents = [self.head] if self.head else []
 
         graph = branch.graph
@@ -1223,27 +1224,30 @@ class GitWriter:
                 if idx in graph.fragments:
                     raise Exception("fragment missing")
 
-                c1 = graph.commits[idx].clone()
-                c1.tree, ctree = self.repo.get_tree(c1.tree)
+                c = graph.commits[idx].clone()
+                c.tree, ctree = self.repo.get_tree(c.tree)
 
-                if not c1.parents:
-                    c1.parents = start_parents
+                if not c.parents:
+                    c.parents = start_parents
                 else:
-                    c1.parents = [self.grafts[p] for p in graph.parents[idx]]
+                    c.parents = [self.grafts[p] for p in graph.parents[idx]]
+
+                for callback in rewrite:
+                    c, ctree = callback(self, idx, c, ctree)
 
                 if fix_tree is not None:
-                    c1.tree, ctree = fix_tree(self, idx, c1.tree, ctree)
+                    c.tree, ctree = fix_tree(self, idx, c.tree, ctree)
 
                 if fix_commit is not None:
-                    c1.author, c1.committer, c1.message = fix_commit(self, idx, c1)
+                    c.author, c.committer, c.message = fix_commit(self, idx, c)
 
-                c2 = self.repo.write_commit(c1)
-                self.grafts[idx] = c2
-                self.replaces[c2] = idx
-                self.graph.add_commit(c2, c1)
+                cidx = self.repo.write_commit(c)
+                self.grafts[idx] = cidx
+                self.replaces[cidx] = idx
+                self.graph.add_commit(cidx, c)
 
                 if idx in graph.heads:
-                    self.graph.heads.add(c2)
+                    self.graph.heads.add(cidx)
 
             graph_count += 1
 
