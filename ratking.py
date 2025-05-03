@@ -1043,11 +1043,11 @@ class GitRepo:
                 raise Exception("bad")
         return new_branch
 
-    def interweave_branch_heads(self, branches, bad_files, fix_commit):
+    def interweave_branch_heads(self, branches, *, fix_commit, rewrite=()):
         heads = []
         for name, branch in branches.items():
             head = branch.head
-            c = branch.graph.commits[head]
+            c = branch.graph.commits[head].clone()
             prefix = [name]
             heads.append((head, c, prefix))
 
@@ -1056,8 +1056,11 @@ class GitRepo:
 
         prev = None
         for head, commit, prefix in heads:
+
             tree_idx, old_tree = self.get_tree(commit.tree)
-            tree_idx, tree = self.clean_tree(commit.tree, old_tree, bad_files)
+
+            for callback in rewrite:
+                commit, old_tree = callback(self, idx, commit, old_tree)
 
             entries = [e for e in entries if e[1] not in prefix]
 
@@ -1155,6 +1158,20 @@ class GitRepo:
         ):
             if writer.grafted(x) != y:
                 raise Exception("bad")
+
+        check_branch = self.interweave_branch_heads(branches, fix_commit=fix_commit)
+        shallow_c = self.get_commit(check_branch)
+        output_c = self.get_commit(new_branch.head)
+
+        if shallow_c.tree != output_c.tree:
+            raise Exception("bad tree")
+
+        if shallow_c.message != output_c.message:
+            raise Exception("bad message")
+
+        if shallow_c.max_date != output_c.max_date:
+            raise Exception("bad date")
+
 
         return new_branch
 
@@ -1341,16 +1358,26 @@ class GitBuilder:
 
             self.branches[name] = branch
 
+    def start_branch(self, name, config):
+        first_commit = config['first_commit']
+        pass
+
+    def merge_branches(self, name, config):
+        pass
+
+    def append_branches(self, name, config):
+        pass
+
 
 #### future thoughts
-# xxx - move shallow head check inside repo.interweave
-# xxx - graft takes list of callbacks, remove fix_message, fix_commit
+# xxx - GitBuilder()
+#       fill out start branch, merge branch, append_branches step
+#
 # xxx - fix names as a callback
-
+# xxx - graft takes list of callbacks, remove fix_message, fix_commit
+#
 # xxx - datetime handling in Signature - @property
 #
-# xxx - Processor()
-#       fold mkrepo.py up into more general class
 #
 # xxx - general idea of finer grained merges, file based or subdirectory based
 #
