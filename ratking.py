@@ -1225,6 +1225,7 @@ class GitWriter:
         named_heads = dict(self.named_heads)
         named_heads[self.name] = self.head
         branch = self.graph.to_branch(self.name, self.head, named_heads, original=self.original)
+        branch.named_heads["init"] = branch.tail
         branch.validate()
         return branch
 
@@ -1345,13 +1346,24 @@ class GitBuilder:
                 self.merge_branches(name, config)
             elif step == "append_branches":
                 self.append_branches(name, config)
+            elif step == "show_branch":
+                self.show_branch(name, config)
+            elif step == "write_branch":
+                self.write_branch(name, config)
             else:
                 raise Bug(f"Bad step: {name}")
+            self.report()
+
+        self.report()
+        return self.branches
 
     def fetch_branch(self, name, config):
+        branch_name = config["default_branch"]
         url = config["remote"]
-        remote_name = f"{name}-origin"
         refresh = config["refresh"]
+        remote_name = f"{name}-origin"
+
+        self.report("loading branch", f"{name}/{branch_name}")
 
         if self.repo.add_remote(remote_name, url) or refresh:
             self.report(f"    fetching {name} from {url}", end="")
@@ -1364,12 +1376,9 @@ class GitBuilder:
         else:
             self.report(f"    already fetched {name} from {url}")
 
-        branch_name = config["default_branch"]
         replace = config.get("replace_parents")
         include = config.get("include_branches", True)
         exclude = config.get("exclude_branches", False)
-
-        self.report("    loading branch", f"{name}/{branch_name}")
 
         branch = self.repo.get_remote_branch(
             remote_name,
@@ -1379,7 +1388,7 @@ class GitBuilder:
             exclude=exclude,
         )
 
-        branch.named_heads["head"] = branch.head
+        # xxx - maybe don't pre-gen init tags
         branch.named_heads["init"] = branch.tail
 
         for ref_name, ref_head in config.get("named_heads", {}).items():
@@ -1397,7 +1406,7 @@ class GitBuilder:
         self.report(len(branch.graph.commits), "total commits")
 
         if "bad_files" in config:
-            self.report("    cleaning", name)
+            self.report("    cleaning branch")
             branch = self.repo.rewrite_branch(branch, config["bad_files"])
 
         self.branches[name] = branch
@@ -1405,7 +1414,7 @@ class GitBuilder:
     def start_branch(self, name, config):
         first_commit = config["first_commit"]
 
-        self.report("   ", "starting empty branch:", name)
+        self.report("starting empty branch:", name)
         init = self.repo.start_branch(name, **first_commit)
 
         writer = self.repo.Writer(name)
@@ -1422,7 +1431,7 @@ class GitBuilder:
         merge_named_heads = config.get("merge_named_heads")
         branches = {k: self.branches[v] for k, v in branches.items()}
 
-        self.report("   ", "creating merged branch:", name, "from", len(branches), "branches")
+        self.report("creating merged branch:", name, "from", len(branches), "branches")
         branch = self.repo.interweave_branches(
             name, branches, merge_named_heads=merge_named_heads, fix_commit=fix_commit
         )
@@ -1431,7 +1440,7 @@ class GitBuilder:
     def append_branches(self, name, config):
         branches = config["branches"]
         writer = self.repo.Writer(name)
-        self.report("   ", "creating new branch:", name, "from ", len(branches), "branches")
+        self.report("creating new branch:", name, "from ", len(branches), "branches")
         for branch_name in branches:
             self.report("   ", "appending", branch_name)
             writer.graft(self.branches[branch_name])
@@ -1439,16 +1448,84 @@ class GitBuilder:
         branch = writer.to_branch()
         self.branches[name] = branch
 
+    def show_branch(self, name, config):
+        branch = self.branches[config['branch']]
+        named_heads = config['named_heads']
+
+        report = []
+
+        init = branch.tail
+        date = branch.graph.commits[init].max_date
+        report.append((date, init, "first commit"))
+
+        for name in named_heads:
+            new = branch.named_heads[name]
+            date = branch.graph.commits[new].max_date
+            old = branch.original.get(new, new)
+            text = f"{name} (was {old})" if old else name
+            report.append((date, new, text))
+
+        self.report(f"branch: {branch.name} (includes {len(branch.named_heads)} branches")
+        self.report()
+        for date, nidx, text in sorted(report):
+            self.report("   ", nidx, text)
+        self.report()
+        self.report("   ", "new head:", branch.head)
+
+
+
+    def write_branch(self, name, config):
+        branch_name = config['branch']
+        branch = self.branches[branch_name]
+        prefix = config.get('prefix') + "/" if 'prefix' in config else ""
+
+        self.repo.write_branch_head(f"{prefix}/{branch_name}", branch.head)
+
+        named_heads = config.get('named_heads', None)
+        include = config.get("include_branches", True)
+        exclude = config.get("exclude_branches", False)
+
+        count = 0
+        skipped = 0
+
+        if named_heads is None:
+            named_heads = {}
+            for name, head in branch.named_heads.items():
+                if not glob_match(include, name) or glob_match(exclude, name):
+                    skipped +=1
+                    continue
+                if name == branch_name:
+                    continue
+
+                named_heads[name] = head
+
+        for name, head in named_heads.items():
+            self.repo.write_branch_head(f"{prefix}/{name}", head)
+            count +=1
+
+        self.report(f"writing {branch_name} to {prefix}{branch_name}")
+        if count or skipped:
+            self.report("   ", f"plus {count} branches, skipping {skipped}")
+
+
+
+
+
+
+
 
 #### future thoughts
 # xxx - adding origin as step
-# xxx - writing output as option for steps
+# xxx - writing output as option for steps / output step with list of branches and include/exclude
 # xxx - writing report as step - include named heads
 
 # xxx - fix names as a callback, separate from fix_commit
 # xxx - bad_files uses a callback
 # xxx - fix_message uses a callback
 #
+# xxx - work out how to 'de special' fix_message
+#
+# xxx - sort steps topologically & preserve existing order by keeping "to search" as pirority heap
 # xxx - datetime handling in Signature - @property
 #
 
