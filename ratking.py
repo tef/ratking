@@ -201,6 +201,24 @@ class GitGraph:
         history.reverse()
         return history
 
+    def get_all_names(self):
+        names = {}
+
+        def add_name(i, n):
+            if n not in names:
+                names[n] = set()
+            names[n].add(i)
+
+        for i, c in self.commits.items():
+            add_name(i, str(c.author))
+            add_name(i, str(c.committer))
+
+            for line in c.message.splitlines():
+                if "Co-authored-by: " in line:
+                    _, name = line.rsplit("Co-authored-by: ", 1)
+                    add_name(i, name.strip())
+        return names
+
     def add_commit(self, idx, c):
         c_parents = c.parents
 
@@ -961,23 +979,9 @@ class GitRepo:
 
         return graph
 
-    def get_graph_names(self, graph):
-        names = {}
+    def get_branch_names(self, branch):
+        return branch.graph.get_all_names()
 
-        def add_name(i, n):
-            if n not in names:
-                names[n] = set()
-            names[n].add(i)
-
-        for i, c in graph.commits.items():
-            add_name(i, str(c.author))
-            add_name(i, str(c.committer))
-
-            for line in c.message.splitlines():
-                if "Co-authored-by: " in line:
-                    _, name = line.rsplit("Co-authored-by: ", 1)
-                    add_name(i, name.strip())
-        return names
 
     def clean_tree(self, addr, old_tree, bad_files):
         if bad_files == None:
@@ -1413,7 +1417,7 @@ class GitBuilder:
         writer = self.repo.Writer(name)
         print("   ", "creating new branch:", name, "from ", len(branches), "branches")
         for branch_name in branches:
-            print("   ", "appending", name)
+            print("   ", "appending", branch_name)
             writer.graft(self.branches[branch_name])
 
         branch = writer.to_branch()
@@ -1421,9 +1425,10 @@ class GitBuilder:
 
 
 #### future thoughts
-# xxx - Real Exceptions: NonLinear, TimeTravel, BadGraph
 #       GitBuilder() takes stdout and writes to it. b.report("ddjjdjd")
-#       graft takes a callback for progress
+#       graft takes a callback for progress, also stdout
+#
+# xxx - Real Exceptions: NonLinear, TimeTravel, BadGraph
 #
 # xxx - fix names as a callback
 # xxx - graft takes list of callbacks, remove fix_message, fix_commit
