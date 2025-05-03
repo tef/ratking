@@ -1035,15 +1035,16 @@ class GitRepo:
         t = GitTree(entries)
         return self.repo.write_tree(t), t
 
-    def rewrite_branch(self, branch, bad_files=None):
+    def rewrite_branch(self, branch, *, bad_files=None):
         writer = GitWriter(self, branch.name)
         branch.validate()
 
-        def fix_tree(writer, idx, tree, ctree):
-            tree, ctree = self.clean_tree(tree, ctree, bad_files)
-            return tree, ctree
+        def fix_tree(writer, idx, commit, ctree):
+            tree, ctree = self.clean_tree(commit.tree, ctree, bad_files)
+            commit.tree = tree
+            return commit, ctree
 
-        writer.graft(branch, fix_tree=fix_tree, fix_commit=None)
+        writer.graft(branch, rewrite=(fix_tree,))
 
         new_branch = writer.to_branch()
 
@@ -1056,11 +1057,12 @@ class GitRepo:
     def prefix_branch(self, branch, prefix):
         writer = GitWriter(self, branch.name)
 
-        def fix_tree(writer, idx, tree, ctree):
-            tree, ctree = self.prefix_tree(tree, ctree, [prefix])
-            return tree, ctree
+        def fix_tree(writer, idx, commit, ctree):
+            tree, ctree = self.prefix_tree(commit.tree, ctree, [prefix])
+            commit.tree = tree
+            return commit, ctree
 
-        writer.graft(branch, fix_tree=fix_tree, fix_commit=None)
+        writer.graft(branch, rewrite=(fix_tree,))
 
         new_branch = writer.to_branch()
         for x, y in zip(branch.graph.walk_children(), new_branch.graph.walk_children()):
@@ -1148,7 +1150,8 @@ class GitRepo:
             t = GitTree(entries)
             return self.write_tree(t), t
 
-        def prefix_tree(writer, idx, tree, ctree):
+        def prefix_tree(writer, idx, commit, ctree):
+            tree = commit.tree
             prefix = graph_prefix
             if isinstance(prefix, dict):
                 prefix = prefix[idx]
@@ -1163,8 +1166,9 @@ class GitRepo:
                 tree, ctree = merge_tree(max_tree, tree, prefix)
 
             grafted_trees[idx] = ctree
+            commit.tree = tree
 
-            return tree, ctree
+            return commit, ctree
 
         def prefix_commit(writer, idx, commit):
             prefix = graph_prefix
@@ -1174,7 +1178,7 @@ class GitRepo:
                 raise Bug("bad prefix, must be set or dict of set")
             return fix_commit(commit, ", ".join(sorted(prefix)))
 
-        writer.graft(merged_branch, fix_tree=prefix_tree, fix_commit=prefix_commit)
+        writer.graft(merged_branch, rewrite=(prefix_tree,), fix_commit=prefix_commit)
 
         new_branch = writer.to_branch()
 
@@ -1233,7 +1237,7 @@ class GitWriter:
         branch.validate()
         return branch
 
-    def graft_commit(self, idx, rewrite=(), fix_tree=None, fix_commit=None):
+    def graft_commit(self, idx, rewrite=(), fix_commit=None):
         start_parents = [self.head] if self.head else []
 
         c = self.repo.get_commit(idx)
@@ -1244,14 +1248,12 @@ class GitWriter:
         else:
             c.parents = [self.grafts[p] for p in c.parents]
 
-        if fix_tree is not None:
-            c.tree, ctree = fix_tree(self, idx, c.tree, ctree)
+        for callback in rewrite:
+            c, ctree = callback(self, idx, c, ctree)
 
         if fix_commit is not None:
             c.author, c.committer, c.message = fix_commit(self, idx, c)
 
-        for callback in rewrite:
-            c, ctree = callback(self, idx, c, ctree)
 
         cidx = self.repo.write_commit(c)
         self.grafts[idx] = cidx
@@ -1262,7 +1264,7 @@ class GitWriter:
         self.graph.heads = set([self.head])
         return cidx
 
-    def graft(self, branch, *, rewrite=(), fix_tree=None, fix_commit=None, report=print):
+    def graft(self, branch, *, rewrite=(), fix_commit=None, report=print):
         start_parents = [self.head] if self.head else []
 
         graph = branch.graph
@@ -1284,9 +1286,6 @@ class GitWriter:
 
                 for callback in rewrite:
                     c, ctree = callback(self, idx, c, ctree)
-
-                if fix_tree is not None:
-                    c.tree, ctree = fix_tree(self, idx, c.tree, ctree)
 
                 if fix_commit is not None:
                     c.author, c.committer, c.message = fix_commit(self, idx, c)
@@ -1577,7 +1576,6 @@ class GitBuilder:
 
 
 #### future thoughts
-# xxx - bad_files uses a callback
 # xxx - fix names as a callback, separate from fix_commit
 # xxx - fix_message uses a callback
 #
