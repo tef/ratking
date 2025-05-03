@@ -36,6 +36,18 @@ def glob_match(pattern, string):
     rx = compile_pattern(pattern)
     return rx.match(string) is not None
 
+class Bug(Exception):
+    pass
+
+class Error(Exception):
+    pass
+
+class TimeTravel(Exception):
+    pass
+
+class NonLinear(Exception):
+    pass
+
 
 @dataclass
 class GitSignature:
@@ -254,9 +266,9 @@ class GitGraph:
             else:
                 if idx not in other.fragments:
                     if self.commits[idx] != other.commits[idx]:
-                        raise Exception("nope")
+                        raise Bug("Two commits with same hash and different values cannot be added to the same graph")
                     if self.parents[idx] != other.parents[idx]:
-                        raise Exception("nope")
+                        raise Bug("Two commits with same hash and different graph values cannot be added to the same graph")
                     continue
 
                 if idx not in self.children:
@@ -272,7 +284,7 @@ class GitGraph:
             # xxx we could allow this? but for now it may prevent bugs
 
             if not self.parents[f] and f not in self.tails:
-                raise Exception("error")
+                raise Bug("Tail commit shouldn't have any parents")
 
         for l in other.heads:
             if not self.children[l]:
@@ -296,17 +308,18 @@ class GitGraph:
             fp = self.parents[f]
             cp = self.commits[f].parents
             if cp:
-                raise Exception("bad: tails has parent in commit")
+                raise Bug("Graph tail has parents in commit")
             if fp:
-                raise Exception("bad: tails has parent[] ... ")
+                raise Bug("Graph tail has parent in graph")
 
         for f in self.fragments:
             if f not in self.tails:
-                raise Exception("fragment not in tails")
+                raise Bug("Graph has fragment that's not in tails")
             if self.commits[f].parents:
-                raise Exception("fragment with parents")
+                raise Bug("Graph has fragment with parents in commit")
             if self.parents[f]:
-                raise Exception("fragment with parents")
+                raise Bug("Graph has fragment with parents in graph")
+
             # fragment can have children if it's found from branch head
             # or no children if it's just the branch head
 
@@ -318,7 +331,7 @@ class GitGraph:
             children = self.children[idx]
             if not children:
                 if idx not in self.heads:
-                    raise Exception("untracked head")
+                    raise Bug("Graph with untracked head")
             for child in children:
                 if child not in inverted_children:
                     inverted_children[child] = set()
@@ -326,10 +339,7 @@ class GitGraph:
 
                 m = [i for i in self.parents[child] if i == idx]
                 if len(m) != 1 or m[0] != idx:
-                    # print(c.parents, m)
-                    print("parent commit", idx)
-                    print("child commit", child, "parents", self.parents[idx])
-                    raise Exception("child listed, not in parent")
+                    raise Bug("Graph has commit with children, but not in parents")
 
         # validate parents
 
@@ -339,19 +349,19 @@ class GitGraph:
             child_parents = inverted_children.get(c, set())
 
             if commit_parents != graph_parents:
-                raise Exception(f"bad parents: {c}")
+                raise Bug(f"Graph has commit with parents: {c}")
 
             if child_parents != set(graph_parents):
-                raise Exception(f"missing children: {c}")
+                raise Bug(f"Graph has commit with missing children: {c}")
 
             if len(set(graph_parents)) != len(graph_parents):
-                raise Exception("dupe parent")
+                raise Error("Graph has commit with dupe parent")
 
             if self.parent_count[c] != len(self.parents[c]):
-                raise Exception("bad count")
+                raise Bug("Graph has inconsistent parent count")
 
             if self.child_count[c] != len(self.children[c]):
-                raise Exception("bad count")
+                raise Bug("Graph has inconsistent child count")
 
         # walk backwards from heads
 
@@ -364,10 +374,10 @@ class GitGraph:
                 found_tails.add(c)
 
         if found_tails != self.tails:
-            raise Error("missing tails")
+            raise Bug("Graph has inconsistent tails")
 
         if walked != set(self.commits):
-            raise Exception("missing commits")
+            raise Bug("Graph has unreachable commits from heads")
 
         # walk forward from talks
         # validate complete walk through children
@@ -381,14 +391,10 @@ class GitGraph:
                 heads.add(i)
 
         if heads != self.heads:
-            print("extra", heads - self.heads)
-            print("missing", self.heads - heads)
-
-            raise Exception("heads is not correct")
+            raise Exception("Graph has inconsistent heads")
 
         if walked != set(self.commits):
-            print("commits", len(self.commits), "walked", len(walked))
-            raise Exception("missing commits")
+            raise Bug("Graph has unreachable commits from tails")
 
     def to_branch(self, name, head, named_heads):
         history = self.first_parents(head)
@@ -397,7 +403,7 @@ class GitGraph:
         for i in history[1:]:
             new_date = self.commits[i].max_date
             if new_date < date:
-                raise Exception("time travel")
+                raise TimeTravel("Graph has commits out of date order")
 
         return GitBranch(
             name=name,
@@ -449,22 +455,20 @@ class GitBranch:
 
         for name, idx in self.named_heads.items():
             if idx not in graph.commits:
-                raise Exception(f"missing head: {name}")
+                raise Bug(f"Graph has named head with no commit: {name}, {idx}")
 
         if self.head not in graph.commits:
-            raise Exception("missing head")
+            raise Bug(f"Graph has head with no commit: {self.head}")
 
         if self.tail not in graph.commits:
-            raise Exception("missing tail")
+            raise Bug(f"Graph has tail with no commit: {self.tail}")
 
         history = graph.first_parents(self.head)
 
-        if history[0] not in graph.tails:
-            raise Exception("what")
         if history[-1] != self.head:
-            raise Exception("how")
+            raise Exception("First parent history does not start at head")
         if history[0] != self.tail:
-            raise Exception("bad tail")
+            raise Exception("First parent history does not end at tail")
 
     def add_named_fragment(self, name, head, other):
         graph = self.graph
@@ -546,15 +550,15 @@ class GitBranch:
         new_history2.sort(key=lambda idx: merged_graph.commits[idx].max_date)
 
         if new_history != new_history2:
-            raise Exception("welp")
+            raise TimeTravel("Merged branch somehow out of date order")
 
         head = new_history[-1]
         tail = new_history[0]
 
         if merged_graph.commits[tail].parents:
-            raise Exception("bad")
+            raise Bug("Merged graph has tail with parent commits")
         if merged_graph.parents[tail]:
-            raise Exception("bad")
+            raise Bug("Merged graph has tail with parent commits in graph")
 
         for name, branch in branches.items():
             h = list(branch_history[name])
@@ -565,9 +569,9 @@ class GitBranch:
                 if idx in g.commits:
                     i = h.pop()
                     if idx != i:
-                        raise Exception("disorder")
+                        raise NonLinear("Merged linear history does not respect individual branch linear history")
             if h:
-                raise Exception("missing")
+                    raise NonLinear("Merged linear history does include individual branch linear history")
 
         return new_history, branch_history, branch_linear_parent, merged_graph
 
@@ -612,11 +616,11 @@ class GitBranch:
         for idx in history[1:]:
             old_parents = merged_graph.commits[idx].parents
             if prev not in old_parents:
-                raise Exception("bad merge", prev, idx)
+                raise Bug("Rewritten commit has missing parent")
 
             new_date = merged_graph.commits[idx].max_date
             if new_date < date:
-                raise Exception("time travel")
+                raise TimeTravel("New history is out of date order")
 
             prev = idx
             date = new_date
@@ -632,17 +636,10 @@ class GitBranch:
         linear_depth = [linear_parent[x] for x in history]
 
         if linear_depth != sorted(linear_depth):
-            raise Exception("bad linear depth")
+            raise NonLinear("First parent history is not in order")
 
         if set(merged_graph.commits) != set(linear_parent):
-            missing = set(merged_graph.commits) - set(linear_parent)
-            print(missing)
-            for m in missing:
-                if m in history:
-                    print(m, "found in linear history")
-                else:
-                    print(m, "not found in linear history")
-            raise Exception(f"bad {len(merged_graph.commits)} {len(linear_parent)}")
+            raise Error("Linear parent does not cover all graph")
 
         # ensure linear ordering of source branches is preserved in merged branch
 
@@ -650,18 +647,18 @@ class GitBranch:
             graph = branch.graph
             history_depth = [linear_parent[x] for x in branch_history[name]]
             if history_depth != sorted(history_depth):
-                raise Exception("branch history not preserved")
+                raise Bug("Linear history of source branch is out of order")
             for c in graph.commits:
                 if branch_linear_parent[name][c] == 0:
                     if linear_parent[c] != 0:
                         # xxx - we exclude extra tails and shouldn't fold them in
                         # xxx - and we error elsewhere about it
-                        raise Exception("bad")
+                        raise NonLinear("Commit in original branch has new linear parent in merged branch")
                 lp = branch_linear_parent[name][c]
                 lp_idx = branch_history[name][lp - 1]
                 nlp = linear_parent[lp_idx]
                 if nlp != linear_parent[c]:
-                    raise Exception("bad")
+                    raise NonLinear("Commit in original branch has new linear parent in merged branch")
 
         # create the named heads for merged branch
         # find all merge points passed in, passed { "named head" : {"upstream name":"commit id"}}
@@ -700,7 +697,7 @@ class GitBranch:
                     next_c = branch_history[name][old_lp]
                     next_lp = linear_parent[next_c]
                     if next_lp <= merge_point_time:
-                        raise Exception("can't make merge point")
+                        raise Error(f"Cannot merge named head {name} in merged branch")
 
             all_named_heads[point_name] = merge_point
 
@@ -793,9 +790,6 @@ class GitRepo:
         committer = GitSignature.from_pygit(obj.committer)
         message = obj.message
 
-        if author.to_pygit() != obj.author:
-            raise Exception("wait")
-
         return GitCommit(
             tree=tree,
             parents=list(str(x) for x in obj.parent_ids),
@@ -812,7 +806,7 @@ class GitRepo:
             addr = self.repo.write_tree(addr)
 
         elif not isinstance(addr, str):
-            raise Exception("bad")
+            raise Bug("Tree address must be string")
 
         obj = self.git.get(addr)
         entries = []
@@ -828,13 +822,13 @@ class GitRepo:
         elif isinstance(c.tree, str):
             tree = pygit2.Oid(hex=tree)
         else:
-            raise Exception("bad")
+            raise Bug("Passed bad tree")
         parents = [pygit2.Oid(hex=p) for p in c.parents]
         author = c.author.to_pygit()
         committer = c.committer.to_pygit()
         out = self.git.create_commit(None, author, committer, c.message, tree, parents)
         if not out:
-            raise Exception("what")
+            raise Error("Couldn't write commit")
         return str(out)
 
     def write_tree(self, t):
@@ -846,7 +840,7 @@ class GitRepo:
             elif isinstance(addr, str):
                 i = pygit2.Oid(hex=addr)
             else:
-                raise Exception("bad")
+                raise Bug("bad tree passed")
             tb.insert(name, i, mode)
 
         out = tb.write()
@@ -854,7 +848,7 @@ class GitRepo:
 
     def start_branch(self, branch_name, name, email, timestamp, message):
         if timestamp.tzinfo is None:
-            raise Exception("needs timestamp")
+            raise Bug("Commit datetime needs timestamp")
         ts = timestamp.astimezone(timezone.utc)
         signature = GitSignature(name, email, int(ts.timestamp()), 0)
         c = GitCommit(
@@ -941,7 +935,7 @@ class GitRepo:
         branch.validate()
         return branch
 
-    def get_graph(self, head, replace_parents=None, known=None):
+    def get_graph(self, head, replace_parents=None, known=None, report=print):
         if replace_parents is None:
             replace_parents = {}
         if known is None:
@@ -964,7 +958,7 @@ class GitRepo:
 
             elif idx in replace_parents:
                 c.parents = list(replace_parents[idx])
-                print("    > replaced", c.parents)
+                report("    > replaced", c.parents)
 
             graph.add_commit(idx, c)
 
@@ -975,7 +969,7 @@ class GitRepo:
 
         missing = set(walked) - set(graph.parents)
         if missing:
-            raise Exception("Missing elements")
+            raise Bug("Missing elements")
 
         return graph
 
@@ -1038,7 +1032,7 @@ class GitRepo:
 
         for x, y in zip(branch.graph.walk_children(), new_branch.graph.walk_children()):
             if writer.grafted(x) != y:
-                raise Exception("bad")
+                raise Bug("Grafted branch out of sync with input branch")
 
         return new_branch
 
@@ -1054,7 +1048,7 @@ class GitRepo:
         new_branch = writer.to_branch()
         for x, y in zip(branch.graph.walk_children(), new_branch.graph.walk_children()):
             if writer.grafted(x) != y:
-                raise Exception("bad")
+                raise Bug("Grafted branch out of sync with input branch")
         return new_branch
 
     def interweave_branch_heads(self, branches, *, fix_commit, rewrite=()):
@@ -1142,7 +1136,7 @@ class GitRepo:
             if isinstance(prefix, dict):
                 prefix = prefix[idx]
             if prefix and not isinstance(prefix, set):
-                raise Exception("bad prefix, must be set or dict of set")
+                raise Bug("bad prefix, must be set or dict of set")
 
             if idx in graph.tails:
                 tree, ctree = merge_tree(start_tree, tree, prefix)
@@ -1160,7 +1154,7 @@ class GitRepo:
             if isinstance(prefix, dict):
                 prefix = prefix[idx]
             if prefix and not isinstance(prefix, set):
-                raise Exception("bad prefix, must be set or dict of set")
+                raise Bug("bad prefix, must be set or dict of set")
             return fix_commit(commit, ", ".join(sorted(prefix)))
 
         writer.graft(merged_branch, fix_tree=prefix_tree, fix_commit=prefix_commit)
@@ -1171,20 +1165,23 @@ class GitRepo:
             merged_branch.graph.walk_children(), new_branch.graph.walk_children()
         ):
             if writer.grafted(x) != y:
-                raise Exception("bad")
+                raise Bug("Grafted branch out of sync with input branch")
 
         check_branch = self.interweave_branch_heads(branches, fix_commit=fix_commit)
         shallow_c = self.get_commit(check_branch)
         output_c = self.get_commit(new_branch.head)
 
+        if shallow_c.author != output_c.author:
+            raise Bug("Branch head inconsistent")
+        if shallow_c.committer != output_c.committer:
+            raise Bug("Branch head inconsistent")
         if shallow_c.tree != output_c.tree:
-            raise Exception("bad tree")
-
-        if shallow_c.message != output_c.message:
-            raise Exception("bad message")
-
+            raise Bug("Branch head inconsistent")
         if shallow_c.max_date != output_c.max_date:
-            raise Exception("bad date")
+            raise Bug("Branch head inconsistent")
+        if shallow_c.message != output_c.message:
+            raise Bug("Branch head inconsistent")
+        # parents will not match
 
         return new_branch
 
@@ -1244,7 +1241,7 @@ class GitWriter:
         self.graph.heads = set([self.head])
         return cidx
 
-    def graft(self, branch, *, rewrite=(), fix_tree=None, fix_commit=None):
+    def graft(self, branch, *, rewrite=(), fix_tree=None, fix_commit=None, report=print):
         start_parents = [self.head] if self.head else []
 
         graph = branch.graph
@@ -1254,7 +1251,7 @@ class GitWriter:
         for idx in graph.walk_children():
             if idx not in self.grafts:
                 if idx in graph.fragments:
-                    raise Exception("fragment missing")
+                    raise Bug("Cannot graft fragment")
 
                 c = graph.commits[idx].clone()
                 c.tree, ctree = self.repo.get_tree(c.tree)
@@ -1285,16 +1282,16 @@ class GitWriter:
 
             if graph_count & 512 == 0:
                 per = graph_count / graph_total
-                print(
+                report(
                     f"\r    > progress {per:.2%} {graph_count} of {graph_total}", end=""
                 )
 
         per = graph_count / graph_total
-        print(f"\r    > progress {per:.2%} {graph_count} of {graph_total}")
+        report(f"\r    > progress {per:.2%} {graph_count} of {graph_total}")
 
         for x in graph.commits:
             if x not in self.grafts:
-                raise Exception("missing")
+                raise Bug("Cannot graft fragment")
 
         self.head = self.grafts[branch.head]
         self.named_heads.update(
@@ -1307,10 +1304,11 @@ class GitWriter:
 
 
 class GitBuilder:
-    def __init__(self, repo):
+    def __init__(self, repo, report=print):
         self.repo = repo
         self.fetched = set()
         self.branches = {}
+        self.report = report
 
         # XXX self.stdout
         # XXX def report(self, ...)
@@ -1331,7 +1329,7 @@ class GitBuilder:
             elif step == "append_branches":
                 self.append_branches(name, config)
             else:
-                raise Exception("bad step")
+                raise Bug(f"Bad step: {name}")
 
     def fetch_branch(self, name, config):
         url = config["remote"]
@@ -1339,22 +1337,22 @@ class GitBuilder:
         refresh = config["refresh"]
 
         if self.repo.add_remote(remote_name, url) or refresh:
-            print(f"    fetching {name} from {url}", end="")
+            self.report(f"    fetching {name} from {url}", end="")
             sys.stdout.flush()
 
             if url not in self.fetched:
                 self.repo.fetch_remote(remote_name)
                 self.fetched.add(url)
-            print()
+            self.report()
         else:
-            print(f"    already fetched {name} from {url}")
+            self.report(f"    already fetched {name} from {url}")
 
         branch_name = config["default_branch"]
         replace = config.get("replace_parents")
         include = config.get("include_branches", True)
         exclude = config.get("exclude_branches", False)
 
-        print("    loading branch", f"{name}/{branch_name}")
+        self.report("    loading branch", f"{name}/{branch_name}")
 
         branch = self.repo.get_remote_branch(
             remote_name,
@@ -1364,13 +1362,14 @@ class GitBuilder:
             exclude=exclude,
         )
 
-        for ref_name, ref_head in config.get("named_heads", {}).items():
-            branch.named_heads[ref_name] = ref_head
-
         branch.named_heads["head"] = branch.head
         branch.named_heads["init"] = branch.tail
 
-        print(
+        for ref_name, ref_head in config.get("named_heads", {}).items():
+            branch.named_heads[ref_name] = ref_head
+
+
+        self.report(
             "    >",
             name,
             "has",
@@ -1378,10 +1377,10 @@ class GitBuilder:
             "related branches",
             end=" ",
         )
-        print(len(branch.graph.commits), "total commits")
+        self.report(len(branch.graph.commits), "total commits")
 
         if "bad_files" in config:
-            print("    cleaning", name)
+            self.report("    cleaning", name)
             branch = self.repo.rewrite_branch(branch, config["bad_files"])
 
         self.branches[name] = branch
@@ -1389,7 +1388,7 @@ class GitBuilder:
     def start_branch(self, name, config):
         first_commit = config["first_commit"]
 
-        print("   ", "starting empty branch:", name)
+        self.report("   ", "starting empty branch:", name)
         init = self.repo.start_branch(name, **first_commit)
 
         writer = self.repo.Writer(name)
@@ -1406,7 +1405,7 @@ class GitBuilder:
         merge_named_heads = config.get("merge_named_heads")
         branches = {k: self.branches[v] for k, v in branches.items()}
 
-        print("   ", "creating merged branch:", name, "from", len(branches), "branches")
+        self.report("   ", "creating merged branch:", name, "from", len(branches), "branches")
         branch = self.repo.interweave_branches(
             name, branches, merge_named_heads=merge_named_heads, fix_commit=fix_commit
         )
@@ -1415,9 +1414,9 @@ class GitBuilder:
     def append_branches(self, name, config):
         branches = config["branches"]
         writer = self.repo.Writer(name)
-        print("   ", "creating new branch:", name, "from ", len(branches), "branches")
+        self.report("   ", "creating new branch:", name, "from ", len(branches), "branches")
         for branch_name in branches:
-            print("   ", "appending", branch_name)
+            self.report("   ", "appending", branch_name)
             writer.graft(self.branches[branch_name])
 
         branch = writer.to_branch()
@@ -1425,17 +1424,12 @@ class GitBuilder:
 
 
 #### future thoughts
-#       GitBuilder() takes stdout and writes to it. b.report("ddjjdjd")
-#       graft takes a callback for progress, also stdout
-#
-# xxx - Real Exceptions: NonLinear, TimeTravel, BadGraph
-#
 # xxx - fix names as a callback
 # xxx - graft takes list of callbacks, remove fix_message, fix_commit
 #
 # xxx - datetime handling in Signature - @property
 #
-# xxx - tag common ancestors of branches
+# xxx - report shows original and not cleaned commits
 #
 
 #### one day
