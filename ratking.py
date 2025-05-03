@@ -44,6 +44,16 @@ class GitSignature:
     time: int
     offset: int
 
+    def __eq__(self, other):
+        return all(
+            (
+                self.name == other.name,
+                self.email == other.email,
+                self.time == other.time,
+                self.offset == other.offset,
+            )
+        )
+
     def replace(self, name=None, email=None, time=None, offset=None):
         return GitSignature(
             name=name if name else self.name,
@@ -217,7 +227,7 @@ class GitGraph:
     def add_graph(self, other):
         for idx in other.commits:
             if idx not in self.commits or idx in self.fragments:
-                c = other.commits[idx]
+                c = other.commits[idx].clone()
                 self.add_commit(idx, c)
                 if idx in other.fragments:
                     self.fragments.add(idx)
@@ -1172,7 +1182,6 @@ class GitRepo:
         if shallow_c.max_date != output_c.max_date:
             raise Exception("bad date")
 
-
         return new_branch
 
     def Writer(self, name):
@@ -1299,85 +1308,132 @@ class GitBuilder:
         self.fetched = set()
         self.branches = {}
 
+        # XXX self.stdout
+        # XXX def report(self, ...)
 
     def run(self, steps, refresh=False):
         if refresh:
             self.fetched = set()
 
         for name, config in steps.items():
-            config['refresh'] = refresh
-            self.fetch_branch(name, config)
-
+            step = config["step"]
+            if step == "fetch_branch":
+                config["refresh"] = refresh
+                self.fetch_branch(name, config)
+            elif step == "start_branch":
+                self.start_branch(name, config)
+            elif step == "merge_branches":
+                self.merge_branches(name, config)
+            elif step == "append_branches":
+                self.append_branches(name, config)
+            else:
+                raise Exception("bad step")
 
     def fetch_branch(self, name, config):
-            url = config['remote']
-            remote_name = f"{name}-origin"
-            refresh = config['refresh']
+        url = config["remote"]
+        remote_name = f"{name}-origin"
+        refresh = config["refresh"]
 
-            if self.repo.add_remote(remote_name, url) or refresh:
-                print(f"    fetching {name} from {url}", end="")
-                sys.stdout.flush()
+        if self.repo.add_remote(remote_name, url) or refresh:
+            print(f"    fetching {name} from {url}", end="")
+            sys.stdout.flush()
 
-                if url not in self.fetched:
-                    self.repo.fetch_remote(remote_name)
-                    self.fetched.add(url)
-                print()
-            else:
-                print(f"    already fetched {name} from {url}")
+            if url not in self.fetched:
+                self.repo.fetch_remote(remote_name)
+                self.fetched.add(url)
+            print()
+        else:
+            print(f"    already fetched {name} from {url}")
 
-            branch_name = config["default_branch"]
-            replace = config.get("replace_parents")
-            include = config.get("include_branches", True)
-            exclude = config.get("exclude_branches", False)
+        branch_name = config["default_branch"]
+        replace = config.get("replace_parents")
+        include = config.get("include_branches", True)
+        exclude = config.get("exclude_branches", False)
 
-            print("    loading branch", f"{name}/{branch_name}")
+        print("    loading branch", f"{name}/{branch_name}")
 
-            branch = self.repo.get_remote_branch(
-                remote_name,
-                branch_name,
-                replace_parents=replace,
-                include=include,
-                exclude=exclude,
-            )
+        branch = self.repo.get_remote_branch(
+            remote_name,
+            branch_name,
+            replace_parents=replace,
+            include=include,
+            exclude=exclude,
+        )
 
-            for ref_name, ref_head in config.get('named_heads', {}).items():
-                branch.named_heads[ref_name] = ref_head
+        for ref_name, ref_head in config.get("named_heads", {}).items():
+            branch.named_heads[ref_name] = ref_head
 
-            branch.named_heads["head"] = branch.head
-            branch.named_heads["init"] = branch.tail
+        branch.named_heads["head"] = branch.head
+        branch.named_heads["init"] = branch.tail
 
+        print(
+            "    >",
+            name,
+            "has",
+            len(branch.named_heads) - 1,
+            "related branches",
+            end=" ",
+        )
+        print(len(branch.graph.commits), "total commits")
 
-            print(
-                "    >", name, "has", len(branch.named_heads) - 1, "related branches", end=" "
-            )
-            print(len(branch.graph.commits), "total commits")
+        if "bad_files" in config:
+            print("    cleaning", name)
+            branch = self.repo.rewrite_branch(branch, config["bad_files"])
 
-            if "bad_files" in config:
-                print("    cleaning", name)
-                branch = self.repo.rewrite_branch(branch, config['bad_files'])
-
-            self.branches[name] = branch
+        self.branches[name] = branch
 
     def start_branch(self, name, config):
-        first_commit = config['first_commit']
-        pass
+        first_commit = config["first_commit"]
+
+        print("   ", "starting empty branch:", name)
+        init = self.repo.start_branch(name, **first_commit)
+
+        writer = self.repo.Writer(name)
+        writer.graft(init)
+
+        branch = writer.to_branch()
+        branch.named_heads["head"] = branch.head
+        branch.named_heads["init"] = branch.tail
+        self.branches[name] = branch
 
     def merge_branches(self, name, config):
-        pass
+        branches = config["branches"]
+        fix_commit = config.get("fix_commit")
+        merge_named_heads = config.get("merge_named_heads")
+        branches = {k: self.branches[v] for k, v in branches.items()}
+
+        print("   ", "creating merged branch:", name, "from", len(branches), "branches")
+        branch = self.repo.interweave_branches(
+            name, branches, merge_named_heads=merge_named_heads, fix_commit=fix_commit
+        )
+        self.branches[name] = branch
 
     def append_branches(self, name, config):
-        pass
+        branches = config["branches"]
+        writer = self.repo.Writer(name)
+        print("   ", "creating new branch:", name, "from ", len(branches), "branches")
+        for branch_name in branches:
+            print("   ", "appending", name)
+            writer.graft(self.branches[branch_name])
+
+        branch = writer.to_branch()
+        self.branches[name] = branch
 
 
 #### future thoughts
-# xxx - GitBuilder()
-#       fill out start branch, merge branch, append_branches step
+# xxx - Real Exceptions: NonLinear, TimeTravel, BadGraph
+#       GitBuilder() takes stdout and writes to it. b.report("ddjjdjd")
+#       graft takes a callback for progress
 #
 # xxx - fix names as a callback
 # xxx - graft takes list of callbacks, remove fix_message, fix_commit
 #
 # xxx - datetime handling in Signature - @property
 #
+# xxx - tag common ancestors of branches
+#
+
+#### one day
 #
 # xxx - general idea of finer grained merges, file based or subdirectory based
 #
