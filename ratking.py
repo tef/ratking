@@ -396,7 +396,7 @@ class GitGraph:
         if walked != set(self.commits):
             raise Bug("Graph has unreachable commits from tails")
 
-    def to_branch(self, name, head, named_heads):
+    def to_branch(self, name, head, named_heads, original):
         history = self.first_parents(head)
 
         date = self.commits[history[0]].max_date
@@ -411,6 +411,7 @@ class GitGraph:
             graph=self,
             tail=history[0],
             named_heads=named_heads,
+            original = original,
         )
 
 
@@ -421,6 +422,7 @@ class GitBranch:
     graph: object
     named_heads: dict
     tail: str
+    original: dict
 
     def clone(self):
         return GitBranch(
@@ -429,6 +431,7 @@ class GitBranch:
             graph=graph.clone(),
             tail=str(self.tail),
             named_heads=dict(self.named_heads),
+            original=dict(self.original),
         )
 
     def common_ancestor(self, other):
@@ -701,12 +704,21 @@ class GitBranch:
 
             all_named_heads[point_name] = merge_point
 
+        all_original = {}
+        for name, branch in branches.items():
+            for k,v in branch.original.items():
+                if k not in all_original:
+                    all_original[k] = v
+                elif v != all_original[k]:
+                    raise Bug("Conflicting rewrites")
+
         branch = GitBranch(
             name=name,
             graph=merged_graph,
             head=head,
             tail=tail,
             named_heads=all_named_heads,
+            original=all_original,
         )
 
         branch.validate()
@@ -869,7 +881,7 @@ class GitRepo:
         graph.heads = set([head])
         named_heads = {branch_name: head}
 
-        branch = graph.to_branch(branch_name, head, named_heads)
+        branch = graph.to_branch(branch_name, head, named_heads, {})
         branch.validate()
 
         return branch
@@ -889,14 +901,14 @@ class GitRepo:
         graph = graph or self.get_graph(head)
         named_heads = dict(named_heads) if named_heads else {}
         named_heads.update(graph.named_heads)
-        return graph.to_branch(name, head, named_heads)
+        return graph.to_branch(name, head, named_heads, {})
 
     def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
         branch_head = self.get_branch_head(branch_name)
         branch_graph = self.get_graph(branch_head, replace_parents)
 
         named_heads = {branch_name: branch_head}
-        branch = graph.to_branch(name, head, named_heads)
+        branch = graph.to_branch(name, head, named_heads, {})
         branch.validate()
 
         return branch
@@ -911,7 +923,8 @@ class GitRepo:
         named_heads = {branch_name: branch_head}
 
         branch = branch_graph.to_branch(
-            name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads
+            name=f"{rname}/{branch_name}", head=branch_head, named_heads=named_heads,
+            original={},
         )
 
         if include:
@@ -1197,6 +1210,7 @@ class GitWriter:
         self.named_heads = {}
         self.grafts = {}
         self.replaces = {}
+        self.original = {}
         self.graph = GitGraph.new()
 
     def grafted(self, idx):
@@ -1208,7 +1222,7 @@ class GitWriter:
             json.dump(out, fh, sort_keys=True, indent=2)
 
     def to_branch(self):
-        branch = self.graph.to_branch(self.name, self.head, dict(self.named_heads))
+        branch = self.graph.to_branch(self.name, self.head, dict(self.named_heads), original=self.original)
         branch.validate()
         return branch
 
@@ -1274,6 +1288,7 @@ class GitWriter:
                 self.grafts[idx] = cidx
                 self.replaces[cidx] = idx
                 self.graph.add_commit(cidx, c)
+                self.original[cidx] = branch.original.get(idx, idx)
 
                 if idx in graph.heads:
                     self.graph.heads.add(cidx)
