@@ -1185,16 +1185,16 @@ class GitWriter:
         branch.validate()
         return branch
 
-    def graft_commit(self, idx, fix_tree=None, fix_commit=None):
+    def graft_commit(self, idx, rewrite=(), fix_tree=None, fix_commit=None):
         start_parents = [self.head] if self.head else []
 
-        c = self.repo.get_commit(idx).clone()
+        c = self.repo.get_commit(idx)
         c.tree, ctree = self.repo.get_tree(c.tree)
 
         if not c.parents:
             c.parents = start_parents
         else:
-            c.parents = [self.grafts[p] for p in c.parents[idx]]
+            c.parents = [self.grafts[p] for p in c.parents]
 
         if fix_tree is not None:
             c.tree, ctree = fix_tree(self, idx, c.tree, ctree)
@@ -1202,13 +1202,15 @@ class GitWriter:
         if fix_commit is not None:
             c.author, c.committer, c.message = fix_commit(self, idx, c)
 
+        for callback in rewrite:
+            c, ctree = callback(self, idx, c, ctree)
+
         cidx = self.repo.write_commit(c)
         self.grafts[idx] = cidx
         self.replaces[cidx] = idx
+        self.head = cidx
 
         self.graph.add_commit(cidx, c)
-
-        self.head = cidx
         self.graph.heads = set([self.head])
         return cidx
 
@@ -1274,12 +1276,76 @@ class GitWriter:
         return self.head
 
 
+class GitBuilder:
+    def __init__(self, repo):
+        self.repo = repo
+        self.fetched = set()
+        self.branches = {}
+
+
+    def run(self, steps, refresh=False):
+        if refresh:
+            self.fetched = set()
+
+        for name, config in steps.items():
+            config['refresh'] = refresh
+            self.fetch_branch(name, config)
+
+
+    def fetch_branch(self, name, config):
+            url = config['remote']
+            remote_name = f"{name}-origin"
+            refresh = config['refresh']
+
+            if self.repo.add_remote(remote_name, url) or refresh:
+                print(f"    fetching {name} from {url}", end="")
+                sys.stdout.flush()
+
+                if url not in self.fetched:
+                    self.repo.fetch_remote(remote_name)
+                    self.fetched.add(url)
+                print()
+            else:
+                print(f"    already fetched {name} from {url}")
+
+            branch_name = config["default_branch"]
+            replace = config.get("replace_parents")
+            include = config.get("include_branches", True)
+            exclude = config.get("exclude_branches", False)
+
+            print("    loading branch", f"{name}/{branch_name}")
+
+            branch = self.repo.get_remote_branch(
+                remote_name,
+                branch_name,
+                replace_parents=replace,
+                include=include,
+                exclude=exclude,
+            )
+
+            for ref_name, ref_head in config.get('named_heads', {}).items():
+                branch.named_heads[ref_name] = ref_head
+
+            branch.named_heads["head"] = branch.head
+            branch.named_heads["init"] = branch.tail
+
+
+            print(
+                "    >", name, "has", len(branch.named_heads) - 1, "related branches", end=" "
+            )
+            print(len(branch.graph.commits), "total commits")
+
+            if "bad_files" in config:
+                print("    cleaning", name)
+                branch = self.repo.rewrite_branch(branch, config['bad_files'])
+
+            self.branches[name] = branch
+
+
 #### future thoughts
-# xxx - repo.rewrite_branch(...)
-# xxx - branch.originally= []
 # xxx - move shallow head check inside repo.interweave
+# xxx - graft takes list of callbacks, remove fix_message, fix_commit
 # xxx - fix names as a callback
-# xxx - graft takes list of callbacks
 
 # xxx - datetime handling in Signature - @property
 #
