@@ -1465,7 +1465,6 @@ class GitBuilder:
     def sort_steps(self, steps):
 
         deps = {}
-
         number = {name: n for n, name in enumerate(steps)}
 
         for name, config in steps.items():
