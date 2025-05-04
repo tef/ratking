@@ -1,11 +1,8 @@
 # rat king: tie git repositories together
 
-Let's say you have two repositories, `UpstreamA` and `UpstreamB`.
+Let's say you have two repositories, `UpstreamA` and `UpstreamB`.  `UpstreamA` has several feature branches open `A1`, `A2`, ... and similiarly `UpstreamB` has `B1`, `B2`, etc.
 
-`UpstreamA` has several feature branches open `A1`, `A2`, ... and similiarly
-`UpstreamB` has `B1`, `B2`, etc.
-
-After running `ratking`, you now have one repository, and one `main` branch.
+After running `ratking`, you now have one repository, and one `main` branch:
 
 - The `main` branch consists of all of the commits on `main` for the upstream repos, interweaved by commit date.
 - Inside each commit is a `UpstreamA` subdirectory, and a `UpstreamB` subdirectory.
