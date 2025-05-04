@@ -824,6 +824,7 @@ class GitRepo:
     def fetch_remote(self, rname):
         o = self.git.remotes[rname]
         o.fetch(callbacks=AuthCallbacks())
+        self._all_remotes = None
 
     def remote_branches(self, remote_name):
         remote = self.git.remotes[remote_name]
@@ -1533,14 +1534,14 @@ class GitBuilder:
 
         self.report("adding remote", f"{remote_name}")
         created = self.repo.add_remote(remote_name, url)
-        if created or refresh:
-            self.report(f"    fetching {remote_name} from {url}", end="")
-            if url not in self.fetched:
-                self.repo.fetch_remote(remote_name)
-                self.fetched.add(url)
-            self.report()
-        else:
-            self.report(f"    already fetched {remote_name} from {url}")
+        #if created or refresh:
+        #    self.report(f"    fetching {remote_name} from {url}", end="")
+        #    if url not in self.fetched:
+        #        # self.repo.fetch_remote(remote_name)
+        #        self.fetched.add(url)
+        #    self.report()
+        #else:
+        #    self.report(f"    already fetched {remote_name} from {url}")
 
     def fetch_branch(self, name, config):
         branch_name = config["default_branch"]
@@ -1552,7 +1553,6 @@ class GitBuilder:
 
         if self.repo.add_remote(remote_name, url) or refresh:
             self.report(f"    fetching {name} from {url}", end="")
-            sys.stdout.flush()
 
             if url not in self.fetched:
                 self.repo.fetch_remote(remote_name)
@@ -1573,20 +1573,21 @@ class GitBuilder:
             exclude=exclude,
         )
 
+        self.report(
+            "    >",
+            name,
+            "has",
+            len(branch.named_heads) - 1 ,
+            "related branches",
+            end=" ",
+        )
+
         # xxx - maybe don't pre-gen init tags
         branch.named_heads["init"] = branch.tail
 
         for ref_name, ref_head in config.get("named_heads", {}).items():
             branch.named_heads[ref_name] = ref_head
 
-        self.report(
-            "    >",
-            name,
-            "has",
-            len(branch.named_heads) - 1,
-            "related branches",
-            end=" ",
-        )
         self.report(len(branch.graph.commits), "total commits")
 
         bad_files = config.get("bad_files")
@@ -1734,13 +1735,19 @@ def main(name):
     # cmd git commmand
     # cmd / cmd help
 
+    import sys
+
+    if len(sys.argv) <= 1:
+        print(sys.argv[0],"run <...>")
+        return
+
     arg = sys.argv[1]
 
     if arg == "run":
         name = sys.argv[2]
         refresh = any(x == "--fetch" for x in sys.argv[3:])
 
-        with open(name, "r+") as fh:
+        with open(f"{name}.json", "r+") as fh:
             builder_config = json.load(fh)
 
         git_repo = GitRepo(name)
@@ -1748,6 +1755,7 @@ def main(name):
         builder = GitBuilder(git_repo)
 
         builder.run(builder_config, refresh=refresh)
+
 
 
 main(__name__)
