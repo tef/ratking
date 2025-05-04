@@ -1534,13 +1534,13 @@ class GitBuilder:
 
         self.report("adding remote", f"{remote_name}")
         created = self.repo.add_remote(remote_name, url)
-        #if created or refresh:
+        # if created or refresh:
         #    self.report(f"    fetching {remote_name} from {url}", end="")
         #    if url not in self.fetched:
         #        # self.repo.fetch_remote(remote_name)
         #        self.fetched.add(url)
         #    self.report()
-        #else:
+        # else:
         #    self.report(f"    already fetched {remote_name} from {url}")
 
     def fetch_branch(self, name, config):
@@ -1577,7 +1577,7 @@ class GitBuilder:
             "    >",
             name,
             "has",
-            len(branch.named_heads) - 1 ,
+            len(branch.named_heads) - 1,
             "related branches",
             end=" ",
         )
@@ -1727,6 +1727,7 @@ class GitBuilder:
 
         self.report()
 
+
 def main(name):
     if name != "__main__":
         return
@@ -1738,7 +1739,7 @@ def main(name):
     import sys
 
     if len(sys.argv) <= 1:
-        print(sys.argv[0],"run <...>")
+        print(sys.argv[0], "run <...>")
         return
 
     arg = sys.argv[1]
@@ -1755,7 +1756,6 @@ def main(name):
         builder = GitBuilder(git_repo)
 
         builder.run(builder_config, refresh=refresh)
-
 
 
 main(__name__)
