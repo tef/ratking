@@ -22,6 +22,37 @@ GIT_GITLINK_MODE = 0o160_000  # actually a submodule, blegh
 GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # Wow, isn't git amazing.
 
 
+class Bug(Exception):
+    pass
+
+
+class Error(Exception):
+    pass
+
+
+class TimeTravel(Exception):
+    pass
+
+
+class NonLinear(Exception):
+    pass
+
+
+class Callback:
+    def __init__(self):
+        self.callbacks = {}
+
+    def get(self, name):
+        return self.callbacks.get(name, name)
+
+    def add(self, name):
+        def _add(fn):
+            self.callbacks[name] = fn
+            return fn
+
+        return _add
+
+
 @functools.cache
 def compile_pattern(pattern):
     regex = glob.translate(pattern, recursive=True)
@@ -37,20 +68,39 @@ def glob_match(pattern, string):
     return rx.match(string) is not None
 
 
-class Bug(Exception):
-    pass
+prefix_message_callbacks = Callback()
 
 
-class Error(Exception):
-    pass
+cc_prefixes = (
+    "build:",
+    "chore:",
+    "ci:",
+    "docs:",
+    "feat:",
+    "fix:",
+    "perf:",
+    "refactor:",
+    "revert:",
+    "style:",
+    "test:",
+)
+
+cc_prefixes2 = tuple(c.replace(":", "\x28") for c in cc_prefixes)
 
 
-class TimeTravel(Exception):
-    pass
-
-
-class NonLinear(Exception):
-    pass
+@prefix_message_callbacks.add("conventional-commit")
+def prefix_with_conventional_commit(c, prefix):
+    message = c.message
+    if len(c.parents) > 1:  # skip merges
+        pass
+    elif message.startswith(cc_prefixes2):  # feat(...):
+        pass
+    elif message.startswith(cc_prefixes):
+        kind, tail = message.split(":", 1)
+        message = f"{kind}({prefix}): {message}"
+    else:
+        message = f"feat({prefix}): {message}"
+    return message
 
 
 @dataclass
@@ -1226,6 +1276,8 @@ class GitRepo:
 
             return commit, ctree
 
+        prefix_message = prefix_message_callbacks.get(prefix_message)
+
         def prefix_commit(writer, idx, commit, ctree):
             prefix = graph_prefix
             if isinstance(prefix, dict):
@@ -1235,7 +1287,12 @@ class GitRepo:
             commit.message = prefix_message(commit, ", ".join(sorted(prefix)))
             return commit, ctree
 
-        writer.graft(merged_branch, rewrite=(prefix_tree, prefix_commit))
+        rewrites = [prefix_tree]
+
+        if prefix_message:
+            rewrites.append(prefix_commit)
+
+        writer.graft(merged_branch, rewrite=rewrites)
 
         new_branch = writer.to_branch()
 
@@ -1245,7 +1302,9 @@ class GitRepo:
             if writer.grafted(x) != y:
                 raise Bug("Grafted branch out of sync with input branch")
 
-        check_branch = self.interweave_branch_heads(branches, rewrite=(prefix_commit,))
+        rewrites = [prefix_commit] if prefix_message else []
+
+        check_branch = self.interweave_branch_heads(branches, rewrite=rewrites)
         shallow_c = self.get_commit(check_branch)
         output_c = self.get_commit(new_branch.head)
 
@@ -1548,8 +1607,12 @@ class GitBuilder:
     def start_branch(self, name, config):
         first_commit = config["first_commit"]
 
+        timestamp = first_commit.pop("timestamp")
+        if isinstance(timestamp, str):
+            timestamp = datetime.fromisoformat(timestamp).astimezone(timezone.utc)
+
         self.report("starting empty branch:", name)
-        init = self.repo.start_branch(name, **first_commit)
+        init = self.repo.start_branch(name, timestamp=timestamp, **first_commit)
 
         writer = self.repo.Writer(name)
         writer.graft(init)
@@ -1567,7 +1630,10 @@ class GitBuilder:
 
         self.report("creating merged branch:", name, "from", len(branches), "branches")
         branch = self.repo.interweave_branches(
-            name, branches, merge_named_heads=merge_named_heads, prefix_message=prefix_message
+            name,
+            branches,
+            merge_named_heads=merge_named_heads,
+            prefix_message=prefix_message,
         )
         self.branches[name] = branch
 
@@ -1659,9 +1725,7 @@ class GitBuilder:
 
 
 #### future thoughts
-# xxx - fix names as a callback, separate from prefix_message
 # xxx - work out how to 'de special' fix_message
-#
 # xxx - sort steps topologically & preserve existing order by keeping "to search" as pirority heap
 # xxx - datetime handling in Signature - @property
 #
