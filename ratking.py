@@ -1450,12 +1450,15 @@ class GitBuilder:
         # XXX self.stdout
         # XXX def report(self, ...)
 
+    def sort_steps(self, steps):
+        return list(steps.items())
+
     def run(self, steps, refresh=False):
         if refresh:
             self.fetched = set()
 
         # XXX -toposort
-        for name, config in steps.items():
+        for name, config in self.sort_steps(steps):
             step = config["step"]
             if step == "add_remote":
                 config["refresh"] = refresh
@@ -1590,14 +1593,14 @@ class GitBuilder:
         replace_names = config.get("replace_names")
 
         if bad_files or replace_names:
-            self.report("    rewriting branch:", end=" ")
             bad_files = self.load_badfiles(bad_files)
             replace_names = self.load_replacement_names(replace_names)
+            actions = []
             if bad_files:
-                self.report("removing bad files", end=" ")
+                actions.append("removing bad files")
             if replace_names:
-                self.report("replacing names", end=" ")
-            self.report()
+                actions.append("replacing names")
+            self.report("    rewriting branch:", ", ".join(actions))
             branch = self.repo.rewrite_branch(
                 branch, bad_files=bad_files, replace_names=replace_names
             )
@@ -1723,9 +1726,34 @@ class GitBuilder:
 
         self.report()
 
+def main(name):
+    if name != "__main__":
+        return
+
+    # cmd run config.file --fetch --skip="..."/
+    # cmd git commmand
+    # cmd / cmd help
+
+    arg = sys.argv[1]
+
+    if arg == "run":
+        name = sys.argv[2]
+        refresh = any(x == "--fetch" for x in sys.argv[3:])
+
+        with open(name, "r+") as fh:
+            builder_config = json.load(fh)
+
+        git_repo = GitRepo(name)
+
+        builder = GitBuilder(git_repo)
+
+        builder.run(builder_config, refresh=refresh)
+
+
+main(__name__)
+
 
 #### future thoughts
-# xxx - work out how to 'de special' fix_message
 # xxx - sort steps topologically & preserve existing order by keeping "to search" as pirority heap
 # xxx - datetime handling in Signature - @property
 #
