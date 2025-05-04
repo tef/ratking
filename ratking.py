@@ -1462,8 +1462,6 @@ class GitBuilder:
         self.loaded = {}
         self.replace_names = {}
 
-        # xxx make def report(*args) that flushes to fh passed
-
     def sort_steps(self, steps):
 
         deps = {}
