@@ -813,10 +813,8 @@ class AuthCallbacks(pygit2.RemoteCallbacks):
 
 
 class GitRepo:
-    def __init__(self, repo_dir, *, report=sys.stdout):
-        if not repo_dir.endswith(".git"):
-            repo_dir += ".git"
-        self.git = pygit2.init_repository(repo_dir, bare=True)
+    def __init__(self, repo_dir, *, bare=True, report=sys.stdout):
+        self.git = pygit2.init_repository(repo_dir, bare=bare)
         self._all_remotes = None
         self.report_fh = report
 
@@ -985,12 +983,12 @@ class GitRepo:
         named_heads.update(graph.named_heads)
         return graph.to_branch(name, head, named_heads, {})
 
-    def get_branch(self, branch_name, include="*", exclude=None, replace_parents=None):
+    def get_branch(self, branch_name, include=None, exclude=None, replace_parents=None):
         branch_head = self.get_branch_head(branch_name)
         branch_graph = self.get_graph(branch_head, replace_parents)
 
         named_heads = {branch_name: branch_head}
-        branch = graph.to_branch(name, head, named_heads, {})
+        branch = branch_graph.to_branch(branch_name, branch_head, named_heads, {})
         branch.validate()
 
         return branch
@@ -1685,7 +1683,7 @@ class GitBuilder:
         c = init.graph.commits[init.head]
 
         branch = writer.to_branch()
-        branch.named_heads["head"] = branch.head
+        # branch.named_heads["head"] = branch.head
         branch.named_heads["init"] = branch.tail
         self.branches[name] = branch
 
@@ -1812,7 +1810,7 @@ def main(name):
         with open(f"{name}.json", "r+") as fh:
             builder_config = json.load(fh)
 
-        git_repo = GitRepo(name, report=sys.stdout)
+        git_repo = GitRepo(f"{name}.git", report=sys.stdout)
 
         builder = GitBuilder(git_repo)
 
