@@ -1,29 +1,33 @@
-# make-a-monorepo
+# rat king: tie git repositories together
 
-Given a set of upstream repositories and their default branches,
-this tool will rewrite the branches so they are all inside subdirectories,
-then merge the branches by interweaving the first parent commits,
-as well as propagating the new subdirectories across the new history.
+Let's say you have two repositories, `UpstreamA` and `UpstreamB`.
 
-In other words, it creates a monorepo from multiple repos.
+`UpstreamA` has several feature branches open `A1`, `A2`, ... and similiarly
+`UpstreamB` has `B1`, `B2`, etc.
 
-For example: Given two repositories `UpstreamA/main` and `UpstreamB/main`,
-this tool creates a new `main` branch containing all of the original commits,
-interweaved amongst the first-parent history of the original `main` branches.
+After running `ratking`, you now have one repository, and one `main` branch.
 
-It also creates 'UpstreamA/*' and 'UpstreamB/*' branches for all of the
-related branches on the upstream repositories. Branches without any
-initial commits in common are ignored.
+- The `main` branch consists of all of the commits on `main` for the upstream repos, interweaved by commit date.
+- Inside each commit is a `UpstreamA` subdirectory, and a `UpstreamB` subdirectory.
+- There's also `UpstreamA/A1` branches, and `UpstreamB/B1` branches alongside.
 
-This allows you to copy across feature branches from the upstream repositories to the new monorepo.
-If the tool is run again, it builds whatever new commits have
-arrived onto the existing tree, assuming the settings have not changed.
+If you make some changes upstream, and run `ratking` again, all the new commits
+and branches are carried over, atop of the already patched commits. If you don't change
+the settings, it produces the same commits as output, each time.
 
-In other words, you can run the tool incrementally.
+This means you can create a monorepo today, pull in updates from the upstream repos
+as you get things working, and then reopen PRs based on the migrated branches, once you're ready to make the switch.
 
-Create a new monorepo branch at `upstream/main`, branch it off
-to get your ci/cd working, re-run the tool, rebase your branch (or merge),
-and keep going until you're ready to make the switch-over.
+Unlike "just do a merge commit", rat king will preserve file history, and `git blame`.
+
+## Caveats
+
+I have only tested this code in production settings. There is an unholy amount of defensive
+code, and for good reason. As much as I have strived for correctness, I cannot be responsible for bugs, faults, or problems that result. 
+
+The code merges each of the upstream repos by their first-parent commit history. In other words, if your repo has more than one init commit, you might have a bit of a bad time at first. Until you work out exactly which commits are at fault.
+
+The error checking is also highly conservative. Multiple things that _could_ work are purposefully checked by assertions, so it's not the end of the world if the thing throws an error.
 
 ## Quick-Start
 
@@ -34,7 +38,8 @@ $ python3 -m venv env
 $ ./env/bin/pip install pygit2
 ```
 
-Write your config file `monorepo.json`, and run the tool:
+Write your config file `monorepo.json`, and run the tool.
+This creates a `monorepo.git` subdirectory, containing the insides of a git repo.
 
 ```
 $ ./gitgraph.py build monorepo
@@ -43,7 +48,7 @@ $ ./gitgraph.py build monorepo
 Run the tool again, forcing it to update the local copies:
 
 ```
-$ ./gitgraph.py run monorepo --fetch
+$ ./gitgraph.py build monorepo --fetch
 ```
 
 ## Configuration
