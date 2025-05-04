@@ -36,14 +36,18 @@ def glob_match(pattern, string):
     rx = compile_pattern(pattern)
     return rx.match(string) is not None
 
+
 class Bug(Exception):
     pass
+
 
 class Error(Exception):
     pass
 
+
 class TimeTravel(Exception):
     pass
+
 
 class NonLinear(Exception):
     pass
@@ -266,9 +270,13 @@ class GitGraph:
             else:
                 if idx not in other.fragments:
                     if self.commits[idx] != other.commits[idx]:
-                        raise Bug("Two commits with same hash and different values cannot be added to the same graph")
+                        raise Bug(
+                            "Two commits with same hash and different values cannot be added to the same graph"
+                        )
                     if self.parents[idx] != other.parents[idx]:
-                        raise Bug("Two commits with same hash and different graph values cannot be added to the same graph")
+                        raise Bug(
+                            "Two commits with same hash and different graph values cannot be added to the same graph"
+                        )
                     continue
 
                 if idx not in self.children:
@@ -411,7 +419,7 @@ class GitGraph:
             graph=self,
             tail=history[0],
             named_heads=named_heads,
-            original = original,
+            original=original,
         )
 
 
@@ -572,9 +580,13 @@ class GitBranch:
                 if idx in g.commits:
                     i = h.pop()
                     if idx != i:
-                        raise NonLinear("Merged linear history does not respect individual branch linear history")
+                        raise NonLinear(
+                            "Merged linear history does not respect individual branch linear history"
+                        )
             if h:
-                    raise NonLinear("Merged linear history does include individual branch linear history")
+                raise NonLinear(
+                    "Merged linear history does include individual branch linear history"
+                )
 
         return new_history, branch_history, branch_linear_parent, merged_graph
 
@@ -656,12 +668,16 @@ class GitBranch:
                     if linear_parent[c] != 0:
                         # xxx - we exclude extra tails and shouldn't fold them in
                         # xxx - and we error elsewhere about it
-                        raise NonLinear("Commit in original branch has new linear parent in merged branch")
+                        raise NonLinear(
+                            "Commit in original branch has new linear parent in merged branch"
+                        )
                 lp = branch_linear_parent[name][c]
                 lp_idx = branch_history[name][lp - 1]
                 nlp = linear_parent[lp_idx]
                 if nlp != linear_parent[c]:
-                    raise NonLinear("Commit in original branch has new linear parent in merged branch")
+                    raise NonLinear(
+                        "Commit in original branch has new linear parent in merged branch"
+                    )
 
         # create the named heads for merged branch
         # find all merge points passed in, passed { "named head" : {"upstream name":"commit id"}}
@@ -706,7 +722,7 @@ class GitBranch:
 
         all_original = {}
         for name, branch in branches.items():
-            for k,v in branch.original.items():
+            for k, v in branch.original.items():
                 if k not in all_original:
                     all_original[k] = v
                 elif v != all_original[k]:
@@ -925,7 +941,9 @@ class GitRepo:
         named_heads = {branch_name: branch_head}
 
         branch = branch_graph.to_branch(
-            name=branch_name, head=branch_head, named_heads=named_heads,
+            name=branch_name,
+            head=branch_head,
+            named_heads=named_heads,
             original={},
         )
 
@@ -991,7 +1009,6 @@ class GitRepo:
     def get_branch_names(self, branch):
         return branch.graph.get_all_names()
 
-
     def clean_tree(self, addr, old_tree, bad_files):
         if bad_files == None:
             return addr, old_tree
@@ -1035,8 +1052,7 @@ class GitRepo:
         t = GitTree(entries)
         return self.repo.write_tree(t), t
 
-    def rewrite_branch(self, branch, *, bad_files=None):
-        writer = GitWriter(self, branch.name)
+    def rewrite_branch(self, branch, *, bad_files=None, replace_names=None):
         branch.validate()
 
         def fix_tree(writer, idx, commit, ctree):
@@ -1044,7 +1060,50 @@ class GitRepo:
             commit.tree = tree
             return commit, ctree
 
-        writer.graft(branch, rewrite=(fix_tree,))
+        def fix_names(writer, idx, commit, ctree):
+            author, committer, message = commit.author, commit.committer, commit.message
+
+            new_author = replace_names.get(str(author))
+            if new_author:
+                name, email = new_author[:-1].rsplit(" <")
+                commit.author = author.replace(name=name, email=email)
+
+            new_committer = replace_names.get(str(committer))
+            if new_committer:
+                name, email = new_committer[:-1].rsplit(" <")
+                commit.committer = committer.replace(name=name, email=email)
+
+            if "Co-authored-by: " in message:
+                lines = []
+                for line in message.splitlines():
+                    if "Co-authored-by: " in line:
+                        line_start, name = line.rsplit("Co-authored-by: ", 1)
+                        if name in replace_names:
+                            name_email = replace_names.get(name)
+                            name, email = name_email[:-1].rsplit(" <")
+                            name = f"{name} <{email}>"
+                        line = f"{line_start}Co-authored-by: {name}"
+                        if line_start or len(lines) == 0 or line != lines[-1]:
+                            lines.append(line)
+
+                    else:
+                        lines.append(line)
+
+                commit.message = "\n".join(lines)
+
+            return commit, ctree
+
+        rewrite = []
+        if bad_files:
+            rewrite.append(fix_tree)
+        if replace_names:
+            rewrite.append(fix_names)
+
+        if not rewrite:
+            return branch
+
+        writer = GitWriter(self, branch.name)
+        writer.graft(branch, rewrite=rewrite)
 
         new_branch = writer.to_branch()
 
@@ -1070,7 +1129,7 @@ class GitRepo:
                 raise Bug("Grafted branch out of sync with input branch")
         return new_branch
 
-    def interweave_branch_heads(self, branches, *, fix_commit, rewrite=()):
+    def interweave_branch_heads(self, branches, *, rewrite=()):
         heads = []
         for name, branch in branches.items():
             head = branch.head
@@ -1086,9 +1145,6 @@ class GitRepo:
 
             tree_idx, old_tree = self.get_tree(commit.tree)
 
-            for callback in rewrite:
-                commit, old_tree = callback(self, idx, commit, old_tree)
-
             entries = [e for e in entries if e[1] not in prefix]
 
             for p in prefix:
@@ -1098,23 +1154,15 @@ class GitRepo:
             t = GitTree(entries)
             tidx = self.write_tree(t)
 
-            if fix_commit is not None:
-                author, committer, message = fix_commit(
-                    commit, ", ".join(sorted(prefix))
-                )
-            else:
-                author, committer, message = (
-                    commit.author,
-                    commit.committer,
-                    commit.message,
-                )
+            for callback in rewrite:
+                commit, t = callback(self, head, commit, t)
 
             c = GitCommit(
                 tree=tidx,
                 parents=([prev] if prev else []),
-                author=author,
-                committer=committer,
-                message=message,
+                author=commit.author,
+                committer=commit.committer,
+                message=commit.message,
                 max_date=commit.max_date,
                 author_date=commit.author_date,
                 committer_date=commit.committer_date,
@@ -1124,7 +1172,12 @@ class GitRepo:
         return prev
 
     def interweave_branches(
-        self, new_name, branches, named_heads=None, merge_named_heads=None, fix_commit=None
+        self,
+        new_name,
+        branches,
+        named_heads=None,
+        merge_named_heads=None,
+        fix_commit=None,
     ):
         graph_prefix = {}
         for name, branch in branches.items():
@@ -1134,7 +1187,10 @@ class GitRepo:
                 graph_prefix[c].add(name)
 
         merged_branch, linear_parent = GitBranch.interweave(
-            new_name, branches, named_heads=named_heads, merge_named_heads=merge_named_heads
+            new_name,
+            branches,
+            named_heads=named_heads,
+            merge_named_heads=merge_named_heads,
         )
 
         writer = GitWriter(self, new_name)
@@ -1176,8 +1232,7 @@ class GitRepo:
                 prefix = prefix[idx]
             if prefix and not isinstance(prefix, set):
                 raise Bug("bad prefix, must be set or dict of set")
-            output = fix_commit(commit, ", ".join(sorted(prefix)))
-            commit.author, commit.committer, commit.message = output
+            commit.message = fix_commit(commit, ", ".join(sorted(prefix)))
             return commit, ctree
 
         writer.graft(merged_branch, rewrite=(prefix_tree, prefix_commit))
@@ -1190,8 +1245,7 @@ class GitRepo:
             if writer.grafted(x) != y:
                 raise Bug("Grafted branch out of sync with input branch")
 
-
-        check_branch = self.interweave_branch_heads(branches, fix_commit=fix_commit)
+        check_branch = self.interweave_branch_heads(branches, rewrite=(prefix_commit,))
         shallow_c = self.get_commit(check_branch)
         output_c = self.get_commit(new_branch.head)
 
@@ -1234,7 +1288,9 @@ class GitWriter:
     def to_branch(self):
         named_heads = dict(self.named_heads)
         named_heads[self.name] = self.head
-        branch = self.graph.to_branch(self.name, self.head, named_heads, original=self.original)
+        branch = self.graph.to_branch(
+            self.name, self.head, named_heads, original=self.original
+        )
         branch.named_heads["init"] = branch.tail
         branch.validate()
         return branch
@@ -1311,7 +1367,11 @@ class GitWriter:
 
         self.head = self.grafts[branch.head]
         self.named_heads.update(
-            {k: self.grafts[v] for k, v in branch.named_heads.items() if k != branch.name}
+            {
+                k: self.grafts[v]
+                for k, v in branch.named_heads.items()
+                if k != branch.name
+            }
         )
 
         for k, v in self.named_heads.items():
@@ -1326,6 +1386,7 @@ class GitBuilder:
         self.branches = {}
         self.report = report
         self.loaded = {}
+        self.replace_names = {}
 
         # XXX self.stdout
         # XXX def report(self, ...)
@@ -1371,11 +1432,37 @@ class GitBuilder:
         return out
 
     def load_badfiles(self, bad_files):
+        if bad_files is None:
+            return None
         if isinstance(bad_files, dict):
             return bad_files
+        elif isinstance(bad_files, str):
+            out = self.load_json(bad_files)
+            return out
+        else:
+            raise Bug("unsupported bad_files")
 
-        out = self.load_json(bad_files)
-        return out
+    def load_replacement_names(self, replace_names):
+        if replace_names is None:
+            return None
+        elif isinstance(replace_names, dict):
+            pass
+        elif isinstance(replace_names, str):
+            replace_names = self.load_json(replace_names)
+        else:
+            raise Bug("unsupported replace_names")
+
+        if id(replace_names) in self.replace_names:
+            return self.replace_names[id(replace_names)]
+
+        replace = {}
+        for name, r in replace_names.items():
+            for x in r:
+                replace[x] = name
+
+        self.replace_names[id(replace_names)] = replace
+
+        return replace
 
     def add_remote(self, name, config):
         remote_name = config.get("name", name)
@@ -1430,7 +1517,6 @@ class GitBuilder:
         for ref_name, ref_head in config.get("named_heads", {}).items():
             branch.named_heads[ref_name] = ref_head
 
-
         self.report(
             "    >",
             name,
@@ -1441,10 +1527,21 @@ class GitBuilder:
         )
         self.report(len(branch.graph.commits), "total commits")
 
-        if "bad_files" in config:
-            self.report("    cleaning branch")
-            bad_files = self.load_badfiles(config["bad_files"])
-            branch = self.repo.rewrite_branch(branch, bad_files=bad_files)
+        bad_files = config.get("bad_files")
+        replace_names = config.get("replace_names")
+
+        if bad_files or replace_names:
+            self.report("    rewriting branch:", end=" ")
+            bad_files = self.load_badfiles(bad_files)
+            replace_names = self.load_replacement_names(replace_names)
+            if bad_files:
+                self.report("removing bad files", end=" ")
+            if replace_names:
+                self.report("replacing names", end=" ")
+            self.report()
+            branch = self.repo.rewrite_branch(
+                branch, bad_files=bad_files, replace_names=replace_names
+            )
 
         self.branches[name] = branch
 
@@ -1486,8 +1583,8 @@ class GitBuilder:
         self.branches[name] = branch
 
     def show_branch(self, name, config):
-        branch = self.branches[config['branch']]
-        named_heads = config['named_heads']
+        branch = self.branches[config["branch"]]
+        named_heads = config["named_heads"]
 
         report = []
 
@@ -1502,23 +1599,21 @@ class GitBuilder:
             text = f"{name} (was {old})" if old else name
             report.append((date, new, text))
 
-        self.report(f"branch: {branch.name} (includes {len(branch.named_heads)} branches")
+        self.report(f"branch: {branch.name} (includes {len(branch.named_heads)} heads)")
         self.report()
         for date, nidx, text in sorted(report):
             self.report("   ", nidx, text)
         self.report()
         self.report("   ", "new head:", branch.head)
 
-
-
     def write_branch(self, name, config):
-        branch_name = config['branch']
+        branch_name = config["branch"]
         branch = self.branches[branch_name]
-        prefix = config.get('prefix') + "/" if 'prefix' in config else ""
+        prefix = config.get("prefix") + "/" if "prefix" in config else ""
 
         self.repo.write_branch_head(f"{prefix}/{branch_name}", branch.head)
 
-        named_heads = config.get('named_heads', None)
+        named_heads = config.get("named_heads", None)
         include = config.get("include_branches", True)
         exclude = config.get("exclude_branches", False)
 
@@ -1529,7 +1624,7 @@ class GitBuilder:
             named_heads = {}
             for name, head in branch.named_heads.items():
                 if not glob_match(include, name) or glob_match(exclude, name):
-                    skipped +=1
+                    skipped += 1
                     continue
                 if name == branch_name:
                     continue
@@ -1538,17 +1633,17 @@ class GitBuilder:
 
         for name, head in named_heads.items():
             self.repo.write_branch_head(f"{prefix}/{name}", head)
-            count +=1
+            count += 1
 
         self.report(f"writing branch '{branch_name}' to '{prefix}{branch_name}'")
         if count or skipped:
             self.report("   ", f"plus {count} branches, skipping {skipped}")
 
     def write_branch_names(self, name, config):
-        branch_name = config['branch']
+        branch_name = config["branch"]
         branch = self.branches[branch_name]
 
-        output_filename = config['output_filename']
+        output_filename = config["output_filename"]
         self.report("writing name list", end="")
 
         names = self.repo.get_branch_names(branch)
@@ -1563,19 +1658,8 @@ class GitBuilder:
         self.report()
 
 
-
-
-
-
-
-
-
 #### future thoughts
-# xxx -
 # xxx - fix names as a callback, separate from fix_commit
-#
-# xxx - fix_message uses a callback
-#
 # xxx - work out how to 'de special' fix_message
 #
 # xxx - sort steps topologically & preserve existing order by keeping "to search" as pirority heap
