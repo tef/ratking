@@ -46,7 +46,7 @@ class Callbacks:
         self.callbacks = {}
 
     def canon(self, name):
-        return name.replace(".","-").replace("_","-")
+        return name.replace(".", "-").replace("_", "-")
 
     def __contains__(self, name):
         return self.canon(name) in self.callbacks
@@ -1564,7 +1564,8 @@ class GitBuilder:
             for item in builder_config_raw:
                 name = item.pop("name")
                 step = item.pop("step")
-                builder_config[name] = cls.make_action(name,step, item)
+                builder_config[name] = cls.make_action(name, step, item)
+
         elif isinstance(builder_config_raw, dict):
             for name, item in builder_config_raw.items():
                 step = item.pop("step")
@@ -1845,9 +1846,7 @@ def main(name):
         filename = sys.argv[2]
         refresh = any(x == "--fetch" for x in sys.argv[3:])
 
-
         builder_config = GitBuilder.load_config_file(f"{filename}.json")
-
 
         git_repo = GitRepo(f"{filename}.git", report=sys.stdout)
         git_repo.report("opened:", git_repo.git.path, end="\n\n")
