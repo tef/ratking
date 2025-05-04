@@ -37,7 +37,7 @@ $ ./env/bin/pip install pygit2
 Write your config file `monorepo.json`, and run the tool:
 
 ```
-$ ./gitgraph.py run monorepo
+$ ./gitgraph.py build monorepo
 ```
 
 Run the tool again, forcing it to update the local copies:

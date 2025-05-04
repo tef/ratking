@@ -1804,13 +1804,10 @@ def main(name):
 
     import sys
 
-    if len(sys.argv) <= 1:
-        print(sys.argv[0], "run <...>")
-        return
 
-    arg = sys.argv[1]
+    arg = sys.argv[1] if len(sys.argv) > 0 else None
 
-    if arg == "run":
+    if arg == "build":
         name = sys.argv[2]
         refresh = any(x == "--fetch" for x in sys.argv[3:])
 
@@ -1822,6 +1819,9 @@ def main(name):
         builder = GitBuilder(git_repo)
 
         builder.run(builder_config, refresh=refresh)
+    else:
+        print(sys.argv[0], "build <...>")
+        return
 
 
 main(__name__)
