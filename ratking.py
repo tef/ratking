@@ -1177,7 +1177,7 @@ class GitRepo:
         branches,
         named_heads=None,
         merge_named_heads=None,
-        fix_commit=None,
+        prefix_message=None,
     ):
         graph_prefix = {}
         for name, branch in branches.items():
@@ -1232,7 +1232,7 @@ class GitRepo:
                 prefix = prefix[idx]
             if prefix and not isinstance(prefix, set):
                 raise Bug("bad prefix, must be set or dict of set")
-            commit.message = fix_commit(commit, ", ".join(sorted(prefix)))
+            commit.message = prefix_message(commit, ", ".join(sorted(prefix)))
             return commit, ctree
 
         writer.graft(merged_branch, rewrite=(prefix_tree, prefix_commit))
@@ -1561,13 +1561,13 @@ class GitBuilder:
 
     def merge_branches(self, name, config):
         branches = config["branches"]
-        fix_commit = config.get("fix_commit")
+        prefix_message = config.get("prefix_message")
         merge_named_heads = config.get("merge_named_heads")
         branches = {k: self.branches[v] for k, v in branches.items()}
 
         self.report("creating merged branch:", name, "from", len(branches), "branches")
         branch = self.repo.interweave_branches(
-            name, branches, merge_named_heads=merge_named_heads, fix_commit=fix_commit
+            name, branches, merge_named_heads=merge_named_heads, prefix_message=prefix_message
         )
         self.branches[name] = branch
 
@@ -1659,7 +1659,7 @@ class GitBuilder:
 
 
 #### future thoughts
-# xxx - fix names as a callback, separate from fix_commit
+# xxx - fix names as a callback, separate from prefix_message
 # xxx - work out how to 'de special' fix_message
 #
 # xxx - sort steps topologically & preserve existing order by keeping "to search" as pirority heap
