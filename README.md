@@ -1,4 +1,4 @@
-# rat king: tie git repositories together
+# `ratking`: tie git repositories together
 
 Let's say you have two repositories, `UpstreamA` and `UpstreamB`.  `UpstreamA` has several feature branches open `A1`, `A2`, ... and similiarly `UpstreamB` has `B1`, `B2`, etc.
 
@@ -6,16 +6,22 @@ After running `ratking`, you now have one repository, and one `main` branch:
 
 - The `main` branch consists of all of the commits on `main` for the upstream repos, interweaved by commit date.
 - Inside each commit is a `UpstreamA` subdirectory, and a `UpstreamB` subdirectory.
-- There's also `UpstreamA/A1` branches, and `UpstreamB/B1` branches alongside.
+- A commit on `UpstreamA` will have the version of `UpstreamB` where it joins `main`, and vice-versa
+- There's also `UpstreamA/A1` branches, and `UpstreamB/B1` branches created alongside the new `main` branch.
 
 If you make some changes upstream, and run `ratking` again, all the new commits
 and branches are carried over, atop of the already patched commits. If you don't change
-the settings, it produces the same commits as output, each time.
+the settings, it produces the same commits as output each time.
 
-This means you can create a monorepo today, pull in updates from the upstream repos
-as you get things working, and then reopen PRs based on the migrated branches, once you're ready to make the switch.
+Unlike "Just do a merge commit", `ratking` will preserve file history so tools like `git blame` continue to work.
 
-Unlike "just do a merge commit", rat king will preserve file history, and `git blame`.
+It also means you don't have to do everything at once.
+
+- Create a new monorepo, and use `ratking` to populate the history to `upstream/main`.
+- Create a new `main` branch based off `upstream/main` and get your CI/Integrations working.
+- Re-run `ratking` to add new commits to `upstream/main`, and `git rebase` or `git merge` your working branch as normal.
+- When you're ready to make the switch, reopen PRs based on the migrated branches, like `upstream/UpstreamA/A1`. 
+
 
 ## Caveats
 
@@ -173,3 +179,38 @@ This is useful for when you want to push the output upstream
     "remote_name": "origin"
 },
 ```
+
+
+### Using the underlying python libraries
+
+There's the main classes for 'doing things'
+
+- GitRepo for getting branches, rewriting branches
+- GitWriter for grafting a set of branches together, or writing out a changed branch
+
+Then there's the underlying data structures for storing things:
+
+- GitBranch 
+- GitGraph
+- GitCommit
+- GitSignature
+- GitTree
+
+There's also a little make-like processor that loads and runs the configuration file:
+
+- GitBuilder
+
+
+```
+r = Repo("name", bare=True)
+
+r.add_remote(...)
+
+r.get_remote_branch(...)
+
+r.interweave_branches(name, {"prefix": branch}, ....)
+
+```
+
+
+
