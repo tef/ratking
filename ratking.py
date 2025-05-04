@@ -8,9 +8,11 @@ import re
 import subprocess
 import sys
 
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from glob import translate as glob_to_regex
+from heapq import heappush, heappop
 
 import pygit2
 
@@ -1367,7 +1369,8 @@ class GitWriter:
 
     def to_branch(self):
         named_heads = dict(self.named_heads)
-        named_heads[self.name] = self.head
+        if self.name:
+            named_heads[self.name] = self.head
         branch = self.graph.to_branch(
             self.name, self.head, named_heads, original=self.original
         )
@@ -1465,50 +1468,35 @@ class GitAction:
     name: str
     step: str
     config: dict
-
-    def depends_on(self):
-        d = set()
-        if self.step in ("show_branch", "write_branch", "write_branch_names"):
-            d.add(self.config["branch"])
-        elif self.step == "append_branches":
-            d.update(self.config["branches"])
-        elif self.step == "merge_branches":
-            for branch_name, branch in self.config["branches"].items():
-                d.add(branch_name)
-        return d
+    dependencies: set
 
     @classmethod
     def sort(self, steps):
-        deps = {}
-        number = {name: n for n, name in enumerate(steps)}
-
-        for name, action in steps.items():
-            deps[name] = action.depends_on()
-
-        pred = {name: set() for name in steps}
-
-        for name, dset in deps.items():
-            for d in dset:
-                pred[d].add(name)
-
-        count = {k: len(v) for k, v in deps.items()}
         search = []
+        number = {}
+        pred = defaultdict(set)
+        count = {}
 
-        for name in steps:
+        for n, (name, action) in enumerate(steps.items()):
+            number[name] = n
+            count[name] = len(action.dependencies)
             if count[name] == 0:
-                search.append((number[name], name))
+                search.append((n, name))
+            for d in action.dependencies:
+                pred[d].add(name)
 
         output = {}
 
         while search:
-            n = min(range(len(search)), key=lambda x: search[x])
-            _, name = search.pop(n)
+            # of the work ready to go, i.e no dependencies left
+            # we pick the action that appeared earliest in the file
+            _, name = heappop(search)
             output[name] = steps[name]
 
             for d in pred[name]:
                 count[d] -= 1
                 if count[d] == 0:
-                    search.append((number[d], d))
+                    heappush(search, (number[d], d))
 
         if set(steps) != set(output):
             raise Bug("Steps missing after sorting")
@@ -1554,6 +1542,18 @@ class GitBuilder:
         return self.branches
 
     @classmethod
+    def make_action(self, name, step, config):
+        deps = set()
+        if step in ("show_branch", "write_branch", "write_branch_names"):
+            deps.add(config["branch"])
+        elif step == "append_branches":
+            deps.update(config["branches"])
+        elif step == "merge_branches":
+            for branch_name, branch in config["branches"].items():
+                deps.add(branch_name)
+        return GitAction(name, step, config, deps)
+
+    @classmethod
     def load_config_file(cls, filename):
         with open(filename, "r+") as fh:
             builder_config_raw = json.load(fh)
@@ -1564,11 +1564,11 @@ class GitBuilder:
             for item in builder_config_raw:
                 name = item.pop("name")
                 step = item.pop("step")
-                builder_config[name] = GitAction(name,step, item)
+                builder_config[name] = cls.make_action(name,step, item)
         elif isinstance(builder_config_raw, dict):
             for name, item in builder_config_raw.items():
                 step = item.pop("step")
-                builder_config[name] = GitAction(name, step, item)
+                builder_config[name] = cls.make_action(name, step, item)
         else:
             raise Error("builder config is of unsupported type")
 
