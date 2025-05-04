@@ -1452,7 +1452,59 @@ class GitBuilder:
         # XXX def report(self, ...)
 
     def sort_steps(self, steps):
-        return list(steps.items())
+
+        deps = {}
+
+        number = {name: n for n, name in enumerate(steps)}
+
+        for name, config in steps.items():
+            d = set()
+            step = config["step"]
+            if step in ("show_branch", "write_branch", "write_branch_names"):
+                d.add(config["branch"])
+            elif step == "append_branches":
+                d.update(config["branches"])
+            elif step == "merge_branches":
+                for branch_name, branch in config["branches"].items():
+                    d.add(branch_name)
+
+            deps[name] = d
+
+        pred = {name: set() for name in steps}
+
+        for name, dset in deps.items():
+            for d in dset:
+                pred[d].add(name)
+
+        count = {k: len(v) for k, v in deps.items()}
+        search = []
+
+        for name in steps:
+            if count[name] == 0:
+                search.append((number[name], name))
+
+        output = {}
+
+        while search:
+            n = min(range(len(search)), key=lambda x: search[x])
+            _, name = search.pop(n)
+            output[name] = steps[name]
+
+            for d in pred[name]:
+                count[d] -= 1
+                if count[d] == 0:
+                    search.append((number[d], d))
+
+        if set(steps) != set(output):
+            raise Bug("Steps missing after sorting")
+
+        if list(steps) == list(output):
+            self.report("running steps in given order:", ", ".join(output))
+        else:
+            self.report("running steps in dependency order:", ", ".join(output))
+        self.report()
+
+        return output.items()
 
     def run(self, steps, refresh=False):
         if refresh:
@@ -1528,7 +1580,7 @@ class GitBuilder:
         return replace
 
     def add_remote(self, name, config):
-        remote_name = config.get("name", name)
+        remote_name = config.get("remote_name", name)
         url = config["url"]
         refresh = config["refresh"]
 
@@ -1631,6 +1683,10 @@ class GitBuilder:
         prefix_message = config.get("prefix_message")
         merge_named_heads = config.get("merge_named_heads")
         branches = {k: self.branches[v] for k, v in branches.items()}
+        strategy = config.get("merge_strategy", "first-parent")
+
+        if strategy != "first-parent":
+            raise Error("only first-parent merges are implemented")
 
         self.report("creating merged branch:", name, "from", len(branches), "branches")
         branch = self.repo.interweave_branches(
@@ -1762,9 +1818,10 @@ main(__name__)
 
 
 #### future thoughts
-# xxx - sort steps topologically & preserve existing order by keeping "to search" as pirority heap
 # xxx - datetime handling in Signature - @property
 #
+# xxx - merge strategy setting for merge_branches
+# xxx - merge
 
 #### one day
 #
