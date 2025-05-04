@@ -39,16 +39,25 @@ class NonLinear(Exception):
     pass
 
 
-class Callback:
+class Callbacks:
     def __init__(self):
         self.callbacks = {}
 
-    def get(self, name):
-        return self.callbacks.get(name, name)
+    def canon(self, name):
+        return name.replace(".","-").replace("_","-")
+
+    def __contains__(self, name):
+        return self.canon(name) in self.callbacks
+
+    def get(self, name, default=None):
+        return self.callbacks.get(self.canon(name), default)
+
+    def __getitem__(self, name):
+        return self.callbacks[self.canon(name)]
 
     def add(self, name):
         def _add(fn):
-            self.callbacks[name] = fn
+            self.callbacks[self.canon(name)] = fn
             return fn
 
         return _add
@@ -69,7 +78,7 @@ def glob_match(pattern, string):
     return rx.match(string) is not None
 
 
-prefix_message_callbacks = Callback()
+prefix_message_callbacks = Callbacks()
 
 
 cc_prefixes = (
@@ -1288,7 +1297,7 @@ class GitRepo:
 
             return commit, ctree
 
-        prefix_message = prefix_message_callbacks.get(prefix_message)
+        prefix_message = prefix_message_callbacks.get(prefix_message, prefix_message)
 
         def prefix_commit(writer, idx, commit, ctree):
             prefix = graph_prefix
@@ -1451,32 +1460,30 @@ class GitWriter:
         return self.head
 
 
-class GitBuilder:
-    def __init__(self, repo):
-        self.repo = repo
-        self.fetched = set()
-        self.branches = {}
-        self.report = repo.report
-        self.loaded = {}
-        self.replace_names = {}
+@dataclass
+class GitAction:
+    name: str
+    step: str
+    config: dict
 
-    def sort_steps(self, steps):
+    def depends_on(self):
+        d = set()
+        if self.step in ("show_branch", "write_branch", "write_branch_names"):
+            d.add(self.config["branch"])
+        elif self.step == "append_branches":
+            d.update(self.config["branches"])
+        elif self.step == "merge_branches":
+            for branch_name, branch in self.config["branches"].items():
+                d.add(branch_name)
+        return d
 
+    @classmethod
+    def sort(self, steps):
         deps = {}
         number = {name: n for n, name in enumerate(steps)}
 
-        for name, config in steps.items():
-            d = set()
-            step = config["step"]
-            if step in ("show_branch", "write_branch", "write_branch_names"):
-                d.add(config["branch"])
-            elif step == "append_branches":
-                d.update(config["branches"])
-            elif step == "merge_branches":
-                for branch_name, branch in config["branches"].items():
-                    d.add(branch_name)
-
-            deps[name] = d
+        for name, action in steps.items():
+            deps[name] = action.depends_on()
 
         pred = {name: set() for name in steps}
 
@@ -1506,6 +1513,23 @@ class GitBuilder:
         if set(steps) != set(output):
             raise Bug("Steps missing after sorting")
 
+        return output
+
+
+class GitBuilder:
+    Actions = Callbacks()
+
+    def __init__(self, repo):
+        self.repo = repo
+        self.fetched = set()
+        self.branches = {}
+        self.report = repo.report
+        self.loaded = {}
+        self.replace_names = {}
+
+    def sort_steps(self, steps):
+        output = GitAction.sort(steps)
+
         if list(steps) == list(output):
             self.report("running steps in given order:", ", ".join(output))
         else:
@@ -1518,31 +1542,37 @@ class GitBuilder:
         if refresh:
             self.fetched = set()
 
-        for name, config in self.sort_steps(steps):
-            step = config["step"]
-            if step == "add_remote":
-                config["refresh"] = refresh
-                self.add_remote(name, config)
-            elif step == "fetch_branch":
-                config["refresh"] = refresh
-                self.fetch_branch(name, config)
-            elif step == "start_branch":
-                self.start_branch(name, config)
-            elif step == "merge_branches":
-                self.merge_branches(name, config)
-            elif step == "append_branches":
-                self.append_branches(name, config)
-            elif step == "show_branch":
-                self.show_branch(name, config)
-            elif step == "write_branch":
-                self.write_branch(name, config)
-            elif step == "write_branch_names":
-                self.write_branch_names(name, config)
-            else:
+        for name, action in self.sort_steps(steps):
+            step, config = action.step, action.config
+            if step not in self.Actions:
                 raise Bug(f"Bad step for {name}: {step}")
+            callback = self.Actions[step]
+            config["refresh"] = refresh
+            callback(self, name, config)
             self.report()
 
         return self.branches
+
+    @classmethod
+    def load_config_file(cls, filename):
+        with open(filename, "r+") as fh:
+            builder_config_raw = json.load(fh)
+
+        builder_config = {}
+
+        if isinstance(builder_config_raw, list):
+            for item in builder_config_raw:
+                name = item.pop("name")
+                step = item.pop("step")
+                builder_config[name] = GitAction(name,step, item)
+        elif isinstance(builder_config_raw, dict):
+            for name, item in builder_config_raw.items():
+                step = item.pop("step")
+                builder_config[name] = GitAction(name, step, item)
+        else:
+            raise Error("builder config is of unsupported type")
+
+        return builder_config
 
     def load_json(self, filename):
         if filename in self.loaded:
@@ -1586,6 +1616,7 @@ class GitBuilder:
 
         return replace
 
+    @Actions.add("add_remote")
     def add_remote(self, name, config):
         remote_name = config.get("remote_name", name)
         url = config["url"]
@@ -1602,6 +1633,7 @@ class GitBuilder:
         # else:
         #    self.report(f"    already fetched {remote_name} from {url}")
 
+    @Actions.add("fetch_branch")
     def fetch_branch(self, name, config):
         branch_name = config["default_branch"]
         url = config["remote"]
@@ -1667,6 +1699,7 @@ class GitBuilder:
 
         self.branches[name] = branch
 
+    @Actions.add("start_branch")
     def start_branch(self, name, config):
         first_commit = config["first_commit"]
 
@@ -1687,6 +1720,7 @@ class GitBuilder:
         branch.named_heads["init"] = branch.tail
         self.branches[name] = branch
 
+    @Actions.add("merge_branches")
     def merge_branches(self, name, config):
         branches = config["branches"]
         prefix_message = config.get("prefix_message")
@@ -1706,6 +1740,7 @@ class GitBuilder:
         )
         self.branches[name] = branch
 
+    @Actions.add("append_branches")
     def append_branches(self, name, config):
         branches = config["branches"]
         writer = self.repo.Writer(name)
@@ -1717,6 +1752,7 @@ class GitBuilder:
         branch = writer.to_branch()
         self.branches[name] = branch
 
+    @Actions.add("show_branch")
     def show_branch(self, name, config):
         branch = self.branches[config["branch"]]
         named_heads = config["named_heads"]
@@ -1741,6 +1777,7 @@ class GitBuilder:
         self.report()
         self.report("   ", "new head:", branch.head)
 
+    @Actions.add("write_branch")
     def write_branch(self, name, config):
         branch_name = config["branch"]
         branch = self.branches[branch_name]
@@ -1774,6 +1811,7 @@ class GitBuilder:
         if count or skipped:
             self.report("   ", f"plus {count} branches, skipping {skipped}")
 
+    @Actions.add("write_branch_names")
     def write_branch_names(self, name, config):
         branch_name = config["branch"]
         branch = self.branches[branch_name]
@@ -1804,16 +1842,17 @@ def main(name):
     arg = sys.argv[1] if len(sys.argv) > 0 else None
 
     if arg == "build":
-        name = sys.argv[2]
+        filename = sys.argv[2]
         refresh = any(x == "--fetch" for x in sys.argv[3:])
 
-        with open(f"{name}.json", "r+") as fh:
-            builder_config = json.load(fh)
 
-        git_repo = GitRepo(f"{name}.git", report=sys.stdout)
+        builder_config = GitBuilder.load_config_file(f"{filename}.json")
+
+
+        git_repo = GitRepo(f"{filename}.git", report=sys.stdout)
+        git_repo.report("opened:", git_repo.git.path, end="\n\n")
 
         builder = GitBuilder(git_repo)
-
         builder.run(builder_config, refresh=refresh)
     else:
         print(sys.argv[0], "build <...>")
@@ -1821,23 +1860,3 @@ def main(name):
 
 
 main(__name__)
-
-
-#### speculative work
-#
-# xxx - general idea of finer grained merges, file based or subdirectory based
-#
-#       i.e. non_linear_depth[x] = {project:n, project:n}
-#       build by walk up from roots, and store a dict of the last 'linear' version of a subtree was
-#
-# xxx - merging with other histories other than linear
-#       and maybe not merging by replacing the first parent
-#
-# xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
-#
-# xxx - merging and allowing a root subdirectory
-#
-# xxx - GitGraph properties
-#       graph.properties = set([monotonic, monotonic-author, monotonic-committer])
-#
-# xxx - preserving weird git headers (?) or change-ids
