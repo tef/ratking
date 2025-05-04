@@ -6,6 +6,7 @@ import json
 import os.path
 import re
 import subprocess
+import sys
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -138,7 +139,6 @@ class GitSignature:
     def date(self, date):
         self.time = int(date.timestamp())
         self.offset = int(date.tzinfo.utcoffset(None).total_seconds()) // 60
-
 
     def to_pygit(self):
         return pygit2.Signature(
@@ -813,11 +813,16 @@ class AuthCallbacks(pygit2.RemoteCallbacks):
 
 
 class GitRepo:
-    def __init__(self, repo_dir):
+    def __init__(self, repo_dir, *, report=sys.stdout):
         if not repo_dir.endswith(".git"):
             repo_dir += ".git"
         self.git = pygit2.init_repository(repo_dir, bare=True)
         self._all_remotes = None
+        self.report_fh = report
+
+    def report(self, *args, **kwargs):
+        if self.report_fh:
+            print(*args, **kwargs, file=self.report_fh, flush=True)
 
     def add_remote(self, rname, url):
         names = list(self.git.remotes.names())
@@ -1027,7 +1032,7 @@ class GitRepo:
         branch.validate()
         return branch
 
-    def get_graph(self, head, replace_parents=None, known=None, report=print):
+    def get_graph(self, head, replace_parents=None, known=None):
         if replace_parents is None:
             replace_parents = {}
         if known is None:
@@ -1050,7 +1055,7 @@ class GitRepo:
 
             elif idx in replace_parents:
                 c.parents = list(replace_parents[idx])
-                report("    > replaced", c.parents)
+                self.report("    > replaced", c.parents)
 
             graph.add_commit(idx, c)
 
@@ -1386,7 +1391,8 @@ class GitWriter:
         self.graph.heads = set([self.head])
         return cidx
 
-    def graft(self, branch, *, rewrite=(), report=print):
+    def graft(self, branch, *, rewrite=()):
+        report = self.repo.report
         start_parents = [self.head] if self.head else []
 
         graph = branch.graph
@@ -1448,16 +1454,15 @@ class GitWriter:
 
 
 class GitBuilder:
-    def __init__(self, repo, report=print):
+    def __init__(self, repo):
         self.repo = repo
         self.fetched = set()
         self.branches = {}
-        self.report = report
+        self.report = repo.report
         self.loaded = {}
         self.replace_names = {}
 
-        # XXX self.stdout
-        # XXX def report(self, ...)
+        # xxx make def report(*args) that flushes to fh passed
 
     def sort_steps(self, steps):
 
@@ -1518,7 +1523,6 @@ class GitBuilder:
         if refresh:
             self.fetched = set()
 
-        # XXX -toposort
         for name, config in self.sort_steps(steps):
             step = config["step"]
             if step == "add_remote":
@@ -1802,9 +1806,6 @@ def main(name):
     # cmd git commmand
     # cmd / cmd help
 
-    import sys
-
-
     arg = sys.argv[1] if len(sys.argv) > 0 else None
 
     if arg == "build":
@@ -1814,7 +1815,7 @@ def main(name):
         with open(f"{name}.json", "r+") as fh:
             builder_config = json.load(fh)
 
-        git_repo = GitRepo(name)
+        git_repo = GitRepo(name, report=sys.stdout)
 
         builder = GitBuilder(git_repo)
 
@@ -1825,6 +1826,7 @@ def main(name):
 
 
 main(__name__)
+
 
 #### speculative work
 #
