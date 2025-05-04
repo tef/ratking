@@ -128,9 +128,19 @@ class GitSignature:
             offset=offset if offset else self.offset,
         )
 
+    @property
+    def date(self):
+        tz = timezone(timedelta(minutes=self.offset))
+        date = datetime.fromtimestamp(float(self.time), tz)
+        return date
+
+    @date.setter
+    def date(self, date):
+        self.time = int(date.timestamp())
+        self.offset = int(date.tzinfo.utcoffset(None).total_seconds()) // 60
+
+
     def to_pygit(self):
-        # time = int(self.date.timestamp())
-        # offset = int(self.date.tzinfo.utcoffset(None).total_seconds()) // 60
         return pygit2.Signature(
             name=self.name, email=self.email, time=self.time, offset=self.offset
         )
@@ -140,8 +150,6 @@ class GitSignature:
 
     @classmethod
     def from_pygit(self, obj):
-        # tz = timezone(timedelta(minutes=obj.offset))
-        # date = datetime.fromtimestamp(float(obj.time), tz)
         return GitSignature(
             name=obj.name, email=obj.email, time=obj.time, offset=obj.offset
         )
@@ -1673,6 +1681,8 @@ class GitBuilder:
         writer = self.repo.Writer(name)
         writer.graft(init)
 
+        c = init.graph.commits[init.head]
+
         branch = writer.to_branch()
         branch.named_heads["head"] = branch.head
         branch.named_heads["init"] = branch.tail
@@ -1816,26 +1826,21 @@ def main(name):
 
 main(__name__)
 
-
-#### future thoughts
-# xxx - datetime handling in Signature - @property
-#
-# xxx - merge strategy setting for merge_branches
-# xxx - merge
-
-#### one day
+#### speculative work
 #
 # xxx - general idea of finer grained merges, file based or subdirectory based
 #
 #       i.e. non_linear_depth[x] = {project:n, project:n}
 #       build by walk up from roots, and store a dict of the last 'linear' version of a subtree was
 #
-# xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
-#
 # xxx - merging with other histories other than linear
 #       and maybe not merging by replacing the first parent
 #
-# xxx - GitGraph
+# xxx - merging into /file.mine /file.theirs rather than /mine/file, /theirs/file
+#
+# xxx - merging and allowing a root subdirectory
+#
+# xxx - GitGraph properties
 #       graph.properties = set([monotonic, monotonic-author, monotonic-committer])
 #
-# xxx - preserving old commit names in headers / changes
+# xxx - preserving weird git headers (?) or change-ids
