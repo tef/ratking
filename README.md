@@ -202,7 +202,9 @@ There's also a little make-like processor that loads and runs the configuration 
 
 
 ```
-r = Repo("name", bare=True)
+from ratking import GitRepo
+
+r = GitRepo("filename", bare=True)
 
 r.add_remote(...)
 

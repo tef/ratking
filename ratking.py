@@ -701,7 +701,16 @@ class GitBranch:
         return new_history, branch_history, branch_linear_parent, merged_graph
 
     @classmethod
-    def interweave(cls, new_name, branches, commit_prefix, *, rewrite=(), named_heads=None, merge_named_heads=()):
+    def interweave(
+        cls,
+        new_name,
+        branches,
+        commit_prefix,
+        *,
+        fix_message=None,
+        named_heads=None,
+        merge_named_heads=(),
+    ):
 
         # create a new linear history
         history, branch_history, branch_linear_parent, merged_graph = (
@@ -788,6 +797,43 @@ class GitBranch:
                     raise NonLinear(
                         "Commit in original branch has new linear parent in merged branch"
                     )
+
+        # fix commits
+
+        def merge_tree(prev_tree, tree, prefix):
+            entries = [e for e in prev_tree.entries if e[1] not in prefix]
+            for p in prefix:
+                e = (GIT_DIR_MODE, p, tree)
+                entries.append(e)
+            return GitTree(entries)
+
+        start_tree = GitTree([])
+        grafted_trees = {}
+
+        for idx in merged_graph.walk_children():
+            prefix = commit_prefix
+            if isinstance(prefix, dict):
+                prefix = prefix[idx]
+            if prefix and not isinstance(prefix, set):
+                raise Bug("bad prefix, must be set or dict of set")
+
+            commit = merged_graph.commits[idx]
+
+            if idx in merged_graph.tails:
+                commit.tree = merge_tree(start_tree, commit.tree, prefix)
+            else:
+                max_parent = max(merged_graph.parents[idx], key=linear_parent.get)
+                max_tree = grafted_trees[max_parent]
+                commit.tree = merge_tree(max_tree, commit.tree, prefix)
+
+            grafted_trees[idx] = commit.tree
+
+            if fix_message:
+                commit.message = fix_message(commit, ", ".join(sorted(prefix)))
+
+        # create the branch:
+        # - named heads
+        # - original
 
         # create the named heads for merged branch
         # find all merge points passed in, passed { "named head" : {"upstream name":"commit id"}}
@@ -947,7 +993,7 @@ class GitRepo:
 
     def get_tree(self, addr):
         if isinstance(addr, GitTree):
-            addr = self.repo.write_tree(addr)
+            addr = self.write_tree(addr)
 
         elif not isinstance(addr, str):
             raise Bug("Tree address must be string")
@@ -1243,7 +1289,7 @@ class GitRepo:
                 raise Bug("Grafted branch out of sync with input branch")
         return new_branch
 
-    def interweave_branch_heads(self, branches, *, rewrite=()):
+    def interweave_branch_heads(self, branches, *, rewrite=(), fix_message=None):
         heads = []
         for name, branch in branches.items():
             head = branch.head
@@ -1268,6 +1314,9 @@ class GitRepo:
             t = GitTree(entries)
             tidx = self.write_tree(t)
 
+            if fix_message:
+                commit.message = fix_message(commit, ", ".join(sorted(prefix)))
+
             for callback in rewrite:
                 commit, t = callback(self, head, commit, t)
 
@@ -1291,9 +1340,8 @@ class GitRepo:
         branches,
         named_heads=None,
         merge_named_heads=None,
-        prefix_message=None,
+        fix_message=None,
     ):
-        prefix_message = prefix_message_callbacks.get(prefix_message, prefix_message)
 
         graph_prefix = {}
         for name, branch in branches.items():
@@ -1302,63 +1350,17 @@ class GitRepo:
                     graph_prefix[c] = set()
                 graph_prefix[c].add(name)
 
-        def prefix_commit(writer, idx, commit, ctree):
-            prefix = graph_prefix
-            if isinstance(prefix, dict):
-                prefix = prefix[idx]
-            if prefix and not isinstance(prefix, set):
-                raise Bug("bad prefix, must be set or dict of set")
-            commit.message = prefix_message(commit, ", ".join(sorted(prefix)))
-            return commit, ctree
-
-
         merged_branch, linear_parent = GitBranch.interweave(
             new_name,
             branches,
             graph_prefix,
-            rewrite=(prefix_commit,),
+            fix_message=fix_message,
             named_heads=named_heads,
             merge_named_heads=merge_named_heads,
         )
 
         writer = GitWriter(self, new_name)
-        start_tree = GitTree([])
-        graph = merged_branch.graph
-        grafted_trees = {}
-
-        def merge_tree(prev_tree, tree, prefix):
-            entries = [e for e in prev_tree.entries if e[1] not in prefix]
-            for p in prefix:
-                e = (GIT_DIR_MODE, p, tree)
-                entries.append(e)
-            t = GitTree(entries)
-            return self.write_tree(t), t
-
-        def prefix_tree(writer, idx, commit, ctree):
-            tree = commit.tree
-            prefix = graph_prefix
-            if isinstance(prefix, dict):
-                prefix = prefix[idx]
-            if prefix and not isinstance(prefix, set):
-                raise Bug("bad prefix, must be set or dict of set")
-
-            if idx in graph.tails:
-                tree, ctree = merge_tree(start_tree, tree, prefix)
-            else:
-                max_parent = max(graph.parents[idx], key=linear_parent.get)
-                max_tree = grafted_trees[max_parent]
-                tree, ctree = merge_tree(max_tree, tree, prefix)
-
-            grafted_trees[idx] = ctree
-            commit.tree = tree
-
-            return commit, ctree
-
-
-        rewrites = [prefix_tree]
-
-        if prefix_message:
-            rewrites.append(prefix_commit)
+        rewrites = []
 
         writer.graft(merged_branch, rewrite=rewrites)
 
@@ -1370,9 +1372,7 @@ class GitRepo:
             if writer.grafted(x) != y:
                 raise Bug("Grafted branch out of sync with input branch")
 
-        rewrites = [prefix_commit] if prefix_message else []
-
-        check_branch = self.interweave_branch_heads(branches, rewrite=rewrites)
+        check_branch = self.interweave_branch_heads(branches, fix_message=fix_message)
         shallow_c = self.get_commit(check_branch)
         output_c = self.get_commit(new_branch.head)
 
@@ -1506,7 +1506,6 @@ class GitWriter:
         for k, v in self.named_heads.items():
             self.repo.get_commit(v)
         return self.head
-
 
 
 class GitBuilder:
@@ -1744,12 +1743,14 @@ class GitBuilder:
         if strategy != "first-parent":
             raise Error("only first-parent merges are implemented")
 
+        fix_message = prefix_message_callbacks.get(prefix_message, None)
+
         self.report("creating merged branch:", name, "from", len(branches), "branches")
         branch = self.repo.interweave_branches(
             name,
             branches,
             merge_named_heads=merge_named_heads,
-            prefix_message=prefix_message,
+            fix_message=fix_message,
         )
         self.branches[name] = branch
 
@@ -1851,7 +1852,6 @@ def main(name):
     def report(*ar, **kw):
         print(*ar, **kw, flush=True)
 
-
     # cmd run config.file --fetch --skip="..."/
     # cmd git commmand
     # cmd / cmd help
@@ -1869,7 +1869,6 @@ def main(name):
         config = GitBuilder.load_config_file(filename)
 
         repo_step = any(a.step == "load_repository" for a in config.values())
-
 
         if not repo_step:
             git_repo = GitRepo(f"{filename}.git", report=report)
@@ -1892,7 +1891,6 @@ def main(name):
 
         if path != cwd:
             report("hey, no")
-
 
         report(sys.argv[0], "build <...>")
         return
