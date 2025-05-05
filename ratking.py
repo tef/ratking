@@ -1634,6 +1634,7 @@ class GitBuilder:
     def load_repository(self, name, config):
         path = config.get("path", name)
         bare = config.get("bare", True)
+        path = os.path.join(self.config_dir, path)
         self.repo = GitRepo(path, bare=bare, report=self.report)
         self.report("opened repo from config:", self.repo.path)
 
@@ -1840,6 +1841,7 @@ class GitBuilder:
         branch = self.branches[branch_name]
 
         output_filename = config["output_filename"]
+        output_filename = os.path.join(self.config_dir, output_filename)
         self.report("writing name list", end="")
 
         names = self.repo.get_branch_names(branch)
