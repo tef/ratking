@@ -898,7 +898,7 @@ class GitBranch:
         )
 
         branch.validate()
-        return branch, linear_parent
+        return branch
 
 
 # used for fetch
@@ -1354,7 +1354,7 @@ class GitRepo:
                     graph_prefix[c] = set()
                 graph_prefix[c].add(name)
 
-        merged_branch, linear_parent = GitBranch.interweave(
+        merged_branch = GitBranch.interweave(
             new_name,
             branches,
             graph_prefix,
