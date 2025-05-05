@@ -14,7 +14,16 @@ from datetime import datetime, timedelta, timezone
 from glob import translate as glob_to_regex
 from heapq import heappush, heappop
 
-import pygit2
+try:
+    import pygit2
+except ImportError:
+    if sys.version_info.major < 3 or sys.version_info.minor < 13:
+        raise Exception("python3.13 and pygit2 must be installed")
+    else:
+        raise Exception("pygit2 must be installed")
+else:
+    if sys.version_info.major < 3 or sys.version_info.minor < 13:
+        raise Exception("python 3.13 is required")
 
 GIT_DIR_MODE = 0o040_000
 GIT_FILE_MODE = 0o100_644
