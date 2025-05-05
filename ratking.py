@@ -121,6 +121,10 @@ def glob_match(pattern, string):
     return rx.match(string) is not None
 
 
+def sibling(base_file, filename):
+    return os.path.join(os.path.dirname(base_file), filename)
+
+
 prefix_message_callbacks = Callbacks()
 
 
@@ -1511,13 +1515,14 @@ class GitWriter:
 class GitBuilder:
     BuildSteps = Callbacks()
 
-    def __init__(self, repo=None, *, report=None):
+    def __init__(self, repo=None, *, report=None, config_dir=None):
         self.repo = repo
         self.fetched = set()
         self.branches = {}
         self.report = report if report else lambda *a, **k: None
         self.loaded = {}
         self.replace_names = {}
+        self.config_dir = config_dir
 
     def sort_steps(self, steps):
         output = BuildStep.sort(steps)
@@ -1577,9 +1582,13 @@ class GitBuilder:
         else:
             raise Error("builder config is of unsupported type")
 
-        return builder_config
+        config_dir = os.path.dirname(filename)
+        return config_dir, builder_config
 
     def load_json(self, filename):
+        if self.config_dir is None:
+            raise Error("no config dir set")
+        filename = os.path.join(self.config_dir, filename)
         if filename in self.loaded:
             return self.loaded[filename]
         with open(filename, "r+") as fh:
@@ -1866,7 +1875,7 @@ def main(name):
         if not filename.endswith(".json"):
             filename = f"{filename}.json"
 
-        config = GitBuilder.load_config_file(filename)
+        config_dir, config = GitBuilder.load_config_file(filename)
 
         repo_step = any(a.step == "load_repository" for a in config.values())
 
@@ -1874,7 +1883,7 @@ def main(name):
             git_repo = GitRepo(f"{filename}.git", report=report)
             git_repo.report("opened default repo:", git_repo.git.path, end="\n\n")
 
-        builder = GitBuilder(git_repo, report=report)
+        builder = GitBuilder(git_repo, config_dir=config_dir, report=report)
         builder.run(config, refresh=refresh)
     else:
         path = None
