@@ -83,8 +83,8 @@ class BuildStep:
 
     @classmethod
     def sort(self, steps):
-        """ Given a dict of {name: build_step}, this method returns
-        a new dict in a stable topologically sorted order. If the 
+        """Given a dict of {name: build_step}, this method returns
+        a new dict in a stable topologically sorted order. If the
         dict is already in order, it will return the same value.
         """
 
@@ -176,8 +176,8 @@ def prefix_with_conventional_commit(c, prefix):
 
 @dataclass
 class GitSignature:
-    """ A name, email, timestamp tuple that represents a Committer
-    or Author header inside a git commit """
+    """A name, email, timestamp tuple that represents a Committer
+    or Author header inside a git commit"""
 
     name: str
     email: str
@@ -230,7 +230,7 @@ class GitSignature:
 
 @dataclass
 class GitCommit:
-    tree: str # can also be GitTree
+    tree: str  # can also be GitTree
     parents: list
     author_date: object
     committer_date: object
@@ -271,7 +271,7 @@ class GitTree:
 
 @dataclass
 class GitGraph:
-    """ A set of connected commits """
+    """A set of connected commits"""
 
     commits: dict
     tails: set
@@ -1824,7 +1824,9 @@ class GitBuilder:
         if strategy != "first-parent":
             raise Error("only first-parent merges are implemented")
 
-        fix_message = prefix_message_callbacks.get(prefix_message, None)
+        fix_message = None
+        if prefix_message:
+            fix_message = prefix_message_callbacks.get(prefix_message, None)
 
         self.report("creating merged branch:", name, "from", len(branches), "branches")
         branch = self.repo.interweave_branches(
@@ -1876,9 +1878,10 @@ class GitBuilder:
     def write_branch(self, name, config):
         branch_name = config["branch"]
         branch = self.branches[branch_name]
-        prefix = config.get("prefix") + "/" if "prefix" in config else ""
+        prefix = config["prefix"] + "/" if "prefix" in config else ""
 
-        self.repo.write_branch_head(f"{prefix}/{branch_name}", branch.head)
+        self.report(f"writing branch '{branch_name}' to '{prefix}{branch_name}'")
+        self.repo.write_branch_head(f"{prefix}{branch_name}", branch.head)
 
         named_heads = config.get("named_heads", None)
         include = config.get("include_branches", True)
@@ -1902,7 +1905,6 @@ class GitBuilder:
             self.repo.write_branch_head(f"{prefix}/{name}", head)
             count += 1
 
-        self.report(f"writing branch '{branch_name}' to '{prefix}{branch_name}'")
         if count or skipped:
             self.report("   ", f"plus {count} branches, skipping {skipped}")
 
@@ -1988,8 +1990,16 @@ def main(name):
         for name in branches:
             steps[name] = BuildStep(name, "load_branch", {}, set())
 
-        builder.run(steps)
+        args = {"branches": {n: n for n in branches}}
+        steps[target] = BuildStep(target, "merge_branches", args, set(branches))
+        steps[f"{target}-output"] = BuildStep(
+            target,
+            "write_branch",
+            {"branch": target, "include_branches": False},
+            set(branches),
+        )
 
+        builder.run(steps)
 
 
 main(__name__)
