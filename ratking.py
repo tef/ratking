@@ -65,6 +65,47 @@ class Callbacks:
         return _add
 
 
+@dataclass
+class BuildStep:
+    name: str
+    step: str
+    config: dict
+    dependencies: set
+
+    @classmethod
+    def sort(self, steps):
+        search = []
+        number = {}
+        pred = defaultdict(set)
+        count = {}
+
+        for n, (name, action) in enumerate(steps.items()):
+            number[name] = n
+            count[name] = len(action.dependencies)
+            if count[name] == 0:
+                search.append((n, name))
+            for d in action.dependencies:
+                pred[d].add(name)
+
+        output = {}
+
+        while search:
+            # of the work ready to go, i.e no dependencies left
+            # we pick the action that appeared earliest in the file
+            _, name = heappop(search)
+            output[name] = steps[name]
+
+            for d in pred[name]:
+                count[d] -= 1
+                if count[d] == 0:
+                    heappush(search, (number[d], d))
+
+        if set(steps) != set(output):
+            raise Bug("Steps missing after sorting")
+
+        return output
+
+
 @functools.cache
 def compile_pattern(pattern):
     regex = glob.translate(pattern, recursive=True)
@@ -660,7 +701,7 @@ class GitBranch:
         return new_history, branch_history, branch_linear_parent, merged_graph
 
     @classmethod
-    def interweave(cls, new_name, branches, named_heads=None, merge_named_heads=()):
+    def interweave(cls, new_name, branches, commit_prefix, *, rewrite=(), named_heads=None, merge_named_heads=()):
 
         # create a new linear history
         history, branch_history, branch_linear_parent, merged_graph = (
@@ -824,14 +865,14 @@ class AuthCallbacks(pygit2.RemoteCallbacks):
 
 
 class GitRepo:
-    def __init__(self, repo_dir, *, bare=True, report=sys.stdout):
-        self.git = pygit2.init_repository(repo_dir, bare=bare)
+    def __init__(self, repo_dir, *, bare=True, report=None):
+        if os.path.exists(repo_dir):
+            self.git = pygit2.Repository(repo_dir)
+        else:
+            self.git = pygit2.init_repository(repo_dir, bare=bare)
+        self.path = self.git.path
         self._all_remotes = None
-        self.report_fh = report
-
-    def report(self, *args, **kwargs):
-        if self.report_fh:
-            print(*args, **kwargs, file=self.report_fh, flush=True)
+        self.report = report if report else lambda *a, **k: None
 
     def add_remote(self, rname, url):
         names = list(self.git.remotes.names())
@@ -1252,6 +1293,8 @@ class GitRepo:
         merge_named_heads=None,
         prefix_message=None,
     ):
+        prefix_message = prefix_message_callbacks.get(prefix_message, prefix_message)
+
         graph_prefix = {}
         for name, branch in branches.items():
             for c in branch.graph.commits:
@@ -1259,9 +1302,21 @@ class GitRepo:
                     graph_prefix[c] = set()
                 graph_prefix[c].add(name)
 
+        def prefix_commit(writer, idx, commit, ctree):
+            prefix = graph_prefix
+            if isinstance(prefix, dict):
+                prefix = prefix[idx]
+            if prefix and not isinstance(prefix, set):
+                raise Bug("bad prefix, must be set or dict of set")
+            commit.message = prefix_message(commit, ", ".join(sorted(prefix)))
+            return commit, ctree
+
+
         merged_branch, linear_parent = GitBranch.interweave(
             new_name,
             branches,
+            graph_prefix,
+            rewrite=(prefix_commit,),
             named_heads=named_heads,
             merge_named_heads=merge_named_heads,
         )
@@ -1299,16 +1354,6 @@ class GitRepo:
 
             return commit, ctree
 
-        prefix_message = prefix_message_callbacks.get(prefix_message, prefix_message)
-
-        def prefix_commit(writer, idx, commit, ctree):
-            prefix = graph_prefix
-            if isinstance(prefix, dict):
-                prefix = prefix[idx]
-            if prefix and not isinstance(prefix, set):
-                raise Bug("bad prefix, must be set or dict of set")
-            commit.message = prefix_message(commit, ", ".join(sorted(prefix)))
-            return commit, ctree
 
         rewrites = [prefix_tree]
 
@@ -1463,60 +1508,20 @@ class GitWriter:
         return self.head
 
 
-@dataclass
-class GitAction:
-    name: str
-    step: str
-    config: dict
-    dependencies: set
-
-    @classmethod
-    def sort(self, steps):
-        search = []
-        number = {}
-        pred = defaultdict(set)
-        count = {}
-
-        for n, (name, action) in enumerate(steps.items()):
-            number[name] = n
-            count[name] = len(action.dependencies)
-            if count[name] == 0:
-                search.append((n, name))
-            for d in action.dependencies:
-                pred[d].add(name)
-
-        output = {}
-
-        while search:
-            # of the work ready to go, i.e no dependencies left
-            # we pick the action that appeared earliest in the file
-            _, name = heappop(search)
-            output[name] = steps[name]
-
-            for d in pred[name]:
-                count[d] -= 1
-                if count[d] == 0:
-                    heappush(search, (number[d], d))
-
-        if set(steps) != set(output):
-            raise Bug("Steps missing after sorting")
-
-        return output
-
 
 class GitBuilder:
-    Actions = Callbacks()
+    BuildSteps = Callbacks()
 
-    def __init__(self, repo):
+    def __init__(self, repo=None, *, report=None):
         self.repo = repo
         self.fetched = set()
         self.branches = {}
-        self.report = repo.report
+        self.report = report if report else lambda *a, **k: None
         self.loaded = {}
         self.replace_names = {}
 
     def sort_steps(self, steps):
-        output = GitAction.sort(steps)
+        output = BuildStep.sort(steps)
 
         if list(steps) == list(output):
             self.report("running steps in given order:", ", ".join(output))
@@ -1532,9 +1537,9 @@ class GitBuilder:
 
         for name, action in self.sort_steps(steps):
             step, config = action.step, action.config
-            if step not in self.Actions:
+            if step not in self.BuildSteps:
                 raise Bug(f"Bad step for {name}: {step}")
-            callback = self.Actions[step]
+            callback = self.BuildSteps[step]
             config["refresh"] = refresh
             callback(self, name, config)
             self.report()
@@ -1551,7 +1556,7 @@ class GitBuilder:
         elif step == "merge_branches":
             for branch_name, branch in config["branches"].items():
                 deps.add(branch_name)
-        return GitAction(name, step, config, deps)
+        return BuildStep(name, step, config, deps)
 
     @classmethod
     def load_config_file(cls, filename):
@@ -1617,13 +1622,20 @@ class GitBuilder:
 
         return replace
 
-    @Actions.add("add_remote")
+    @BuildSteps.add("load_repository")
+    def load_repository(self, name, config):
+        path = config.get("path", name)
+        bare = config.get("bare", True)
+        self.repo = GitRepo(path, bare=bare, report=self.report)
+        self.report("opened repo from config:", self.repo.path)
+
+    @BuildSteps.add("add_remote")
     def add_remote(self, name, config):
         remote_name = config.get("remote_name", name)
         url = config["url"]
         refresh = config["refresh"]
 
-        self.report("adding remote", f"{remote_name}")
+        self.report("adding remote:", f"{remote_name}")
         created = self.repo.add_remote(remote_name, url)
         # if created or refresh:
         #    self.report(f"    fetching {remote_name} from {url}", end="")
@@ -1634,7 +1646,7 @@ class GitBuilder:
         # else:
         #    self.report(f"    already fetched {remote_name} from {url}")
 
-    @Actions.add("fetch_branch")
+    @BuildSteps.add("fetch_branch")
     def fetch_branch(self, name, config):
         branch_name = config["default_branch"]
         url = config["remote"]
@@ -1700,7 +1712,7 @@ class GitBuilder:
 
         self.branches[name] = branch
 
-    @Actions.add("start_branch")
+    @BuildSteps.add("start_branch")
     def start_branch(self, name, config):
         first_commit = config["first_commit"]
 
@@ -1721,7 +1733,7 @@ class GitBuilder:
         branch.named_heads["init"] = branch.tail
         self.branches[name] = branch
 
-    @Actions.add("merge_branches")
+    @BuildSteps.add("merge_branches")
     def merge_branches(self, name, config):
         branches = config["branches"]
         prefix_message = config.get("prefix_message")
@@ -1741,7 +1753,7 @@ class GitBuilder:
         )
         self.branches[name] = branch
 
-    @Actions.add("append_branches")
+    @BuildSteps.add("append_branches")
     def append_branches(self, name, config):
         branches = config["branches"]
         writer = self.repo.Writer(name)
@@ -1753,7 +1765,7 @@ class GitBuilder:
         branch = writer.to_branch()
         self.branches[name] = branch
 
-    @Actions.add("show_branch")
+    @BuildSteps.add("show_branch")
     def show_branch(self, name, config):
         branch = self.branches[config["branch"]]
         named_heads = config["named_heads"]
@@ -1778,7 +1790,7 @@ class GitBuilder:
         self.report()
         self.report("   ", "new head:", branch.head)
 
-    @Actions.add("write_branch")
+    @BuildSteps.add("write_branch")
     def write_branch(self, name, config):
         branch_name = config["branch"]
         branch = self.branches[branch_name]
@@ -1812,7 +1824,7 @@ class GitBuilder:
         if count or skipped:
             self.report("   ", f"plus {count} branches, skipping {skipped}")
 
-    @Actions.add("write_branch_names")
+    @BuildSteps.add("write_branch_names")
     def write_branch_names(self, name, config):
         branch_name = config["branch"]
         branch = self.branches[branch_name]
@@ -1836,25 +1848,53 @@ def main(name):
     if name != "__main__":
         return
 
+    def report(*ar, **kw):
+        print(*ar, **kw, flush=True)
+
+
     # cmd run config.file --fetch --skip="..."/
     # cmd git commmand
     # cmd / cmd help
 
     arg = sys.argv[1] if len(sys.argv) > 0 else None
+    git_repo = None
 
     if arg == "build":
         filename = sys.argv[2]
         refresh = any(x == "--fetch" for x in sys.argv[3:])
 
-        builder_config = GitBuilder.load_config_file(f"{filename}.json")
+        if not filename.endswith(".json"):
+            filename = f"{filename}.json"
 
-        git_repo = GitRepo(f"{filename}.git", report=sys.stdout)
-        git_repo.report("opened:", git_repo.git.path, end="\n\n")
+        config = GitBuilder.load_config_file(filename)
 
-        builder = GitBuilder(git_repo)
-        builder.run(builder_config, refresh=refresh)
+        repo_step = any(a.step == "load_repository" for a in config.values())
+
+
+        if not repo_step:
+            git_repo = GitRepo(f"{filename}.git", report=report)
+            git_repo.report("opened default repo:", git_repo.git.path, end="\n\n")
+
+        builder = GitBuilder(git_repo, report=report)
+        builder.run(config, refresh=refresh)
     else:
-        print(sys.argv[0], "build <...>")
+        path = None
+        cwd = os.getcwd()
+        while cwd:
+            if os.path.exists(os.path.join(cwd, ".git")):
+                path = cwd
+
+            cwd, last = os.path.split(cwd)
+            if not last:
+                break
+
+        report("git repo found at", path)
+
+        if path != cwd:
+            report("hey, no")
+
+
+        report(sys.argv[0], "build <...>")
         return
 
 
