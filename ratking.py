@@ -83,6 +83,11 @@ class BuildStep:
 
     @classmethod
     def sort(self, steps):
+        """ Given a dict of {name: build_step}, this method returns
+        a new dict in a stable topologically sorted order. If the 
+        dict is already in order, it will return the same value.
+        """
+
         search = []
         number = {}
         pred = defaultdict(set)
@@ -171,6 +176,9 @@ def prefix_with_conventional_commit(c, prefix):
 
 @dataclass
 class GitSignature:
+    """ A name, email, timestamp tuple that represents a Committer
+    or Author header inside a git commit """
+
     name: str
     email: str
     time: int
@@ -222,7 +230,7 @@ class GitSignature:
 
 @dataclass
 class GitCommit:
-    tree: str
+    tree: str # can also be GitTree
     parents: list
     author_date: object
     committer_date: object
@@ -263,14 +271,16 @@ class GitTree:
 
 @dataclass
 class GitGraph:
+    """ A set of connected commits """
+
     commits: dict
     tails: set
     heads: set
     parents: dict
-    parent_count: dict
     children: dict
-    child_count: dict
     fragments: set
+    parent_count: dict
+    child_count: dict
 
     @classmethod
     def new(self):
@@ -295,6 +305,24 @@ class GitGraph:
             parent_count=dict(parent_count),
             child_count=dict(child_count),
             fragments=set(self.fragments),
+        )
+
+    def to_branch(self, name, head, named_heads, original):
+        history = self.first_parents(head)
+
+        date = self.commits[history[0]].max_date
+        for i in history[1:]:
+            new_date = self.commits[i].max_date
+            if new_date < date:
+                raise TimeTravel("Graph has commits out of date order")
+
+        return GitBranch(
+            name=name,
+            head=head,
+            graph=self,
+            tail=history[0],
+            named_heads=named_heads,
+            original=original,
         )
 
     def walk_children(self):
@@ -526,24 +554,6 @@ class GitGraph:
 
         if walked != set(self.commits):
             raise Bug("Graph has unreachable commits from tails")
-
-    def to_branch(self, name, head, named_heads, original):
-        history = self.first_parents(head)
-
-        date = self.commits[history[0]].max_date
-        for i in history[1:]:
-            new_date = self.commits[i].max_date
-            if new_date < date:
-                raise TimeTravel("Graph has commits out of date order")
-
-        return GitBranch(
-            name=name,
-            head=head,
-            graph=self,
-            tail=history[0],
-            named_heads=named_heads,
-            original=original,
-        )
 
 
 @dataclass
@@ -1664,8 +1674,60 @@ class GitBuilder:
         # else:
         #    self.report(f"    already fetched {remote_name} from {url}")
 
-    @BuildSteps.add("fetch_branch")
+    @BuildSteps.add("load_branch")
     def fetch_branch(self, name, config):
+        branch_name = config.get("branch_name", name)
+
+        self.report("loading branch", f"{branch_name}")
+
+        replace = config.get("replace_parents")
+        include = config.get("include_branches", True)
+        exclude = config.get("exclude_branches", False)
+
+        branch = self.repo.get_branch(
+            branch_name,
+            replace_parents=replace,
+            include=include,
+            exclude=exclude,
+        )
+
+        self.report(
+            "    >",
+            name,
+            "has",
+            len(branch.named_heads) - 1,
+            "related branches",
+            end=" ",
+        )
+
+        # xxx - maybe don't pre-gen init tags
+        branch.named_heads["init"] = branch.tail
+
+        for ref_name, ref_head in config.get("named_heads", {}).items():
+            branch.named_heads[ref_name] = ref_head
+
+        self.report(len(branch.graph.commits), "total commits")
+
+        bad_files = config.get("bad_files")
+        replace_names = config.get("replace_names")
+
+        if bad_files or replace_names:
+            bad_files = self.load_badfiles(bad_files)
+            replace_names = self.load_replacement_names(replace_names)
+            actions = []
+            if bad_files:
+                actions.append("removing bad files")
+            if replace_names:
+                actions.append("replacing names")
+            self.report("    rewriting branch:", ", ".join(actions))
+            branch = self.repo.rewrite_branch(
+                branch, bad_files=bad_files, replace_names=replace_names
+            )
+
+        self.branches[name] = branch
+
+    @BuildSteps.add("fetch_remote_branch")
+    def fetch_remote_branch(self, name, config):
         branch_name = config["default_branch"]
         url = config["remote"]
         refresh = config["refresh"]
@@ -1879,7 +1941,10 @@ def main(name):
     arg = sys.argv[1] if len(sys.argv) > 0 else None
     git_repo = None
 
-    if arg == "build":
+    if not arg:
+        report(sys.argv[0], "build <...>")
+        sys.exit(-1)
+    elif arg == "build":
         filename = sys.argv[2]
         refresh = any(x == "--fetch" for x in sys.argv[3:])
 
@@ -1896,24 +1961,35 @@ def main(name):
 
         builder = GitBuilder(git_repo, config_dir=config_dir, report=report)
         builder.run(config, refresh=refresh)
-    else:
+    elif arg == "merge":
         path = None
         cwd = os.getcwd()
         while cwd:
             if os.path.exists(os.path.join(cwd, ".git")):
                 path = cwd
+                break
 
             cwd, last = os.path.split(cwd)
             if not last:
                 break
 
-        report("git repo found at", path)
-
         if path != cwd:
-            report("hey, no")
+            print(path, cwd)
+            raise Exception("Run inside the root directory of the repository, thanks.")
 
-        report(sys.argv[0], "build <...>")
-        return
+        git_repo = GitRepo(path, report=report)
+        builder = GitBuilder(git_repo, config_dir=path, report=report)
+
+        steps = {}
+
+        branches = sys.argv[2:]
+        target = branches.pop()
+
+        for name in branches:
+            steps[name] = BuildStep(name, "load_branch", {}, set())
+
+        builder.run(steps)
+
 
 
 main(__name__)
