@@ -1,0 +1,125 @@
+{
+    "monorepo.git": {
+        "step": "load_repository",
+	"path": "monorepo.git"
+    },
+    "origin": {
+        "step": "add_remote",
+        "url": "git@github.com:ExampleUser/final-monorepo.git",
+        "remote_name": "origin"
+    },
+    "webapp": {
+        "step": "fetch_remote_branch",
+        "default_branch": "main",
+        "remote": "git@github.com:ExampleUser/example-webapp-archive.git",
+        "include_branches": false,
+        "exclude_branches": true
+    },
+    "webapp-shared": {
+        "step": "fetch_remote_branch",
+        "default_branch": "develop",
+        "remote": "git@github.com:ExampleUser/shared-dependencies.git",
+        "include_branches": "**",
+        "exclude_branches": "**dependabot*"
+    },
+    "webapp-api": {
+        "step": "fetch_remote_branch",
+        "default_branch": "develop",
+        "remote": "git@github.com:ExampleUser/webapp-api.git",
+        "include_branches": "**",
+        "exclude_branches": "**/dependabot/**"
+    },
+    "webapp-frontend": {
+        "step": "fetch_remote_branch",
+        "default_branch": "develop",
+        "remote": "git@github.com:ExampleUser/example-monorepo.git"
+    },
+    "api-daily-pricing": {
+        "step": "fetch_remote_branch",
+        "default_branch": "develop",
+        "remote": "git@github.com:ExampleUser/api-daily-pricing.git",
+        "bad_files": "bad_files.json",
+        "replace_names": "replace_names.json",
+        "named_heads": {
+            "develop-mergepoint": "ac62c3416afd74e200554b8748906b62d01faef8"
+        },
+        "include_branches": "**",
+        "exclude_branches": "**/dependabot/**"
+    },
+    "api-currencies": {
+        "step": "fetch_remote_branch",
+        "default_branch": "develop",
+        "remote": "git@github.com:ExampleUser/api-currencies.git",
+        "include_branches": "**",
+        "exclude_branches": "**/dependabot/**"
+    },
+    
+    "init": {
+        "step": "start_branch",
+        "first_commit": {
+            "name": "ExampleUser",
+            "email": "example@example.net",
+            "timestamp": "2001-01-01",
+            "message": "feat: initial commit"
+        }
+    },
+    "webapp-weaved": {
+        "step": "merge_branches",
+	"merge_strategy": "first-parent",
+        "branches": {
+            "webapp": "webapp"
+        },
+        "prefix_message": "conventional-commit"
+    },
+    "merged-branches": {
+        "step": "merge_branches",
+	"merge_strategy": "first-parent",
+        "branches": {
+            "webapp-shared": "webapp-shared",
+            "webapp-api": "webapp-api",
+            "webapp-frontend": "webapp-frontend",
+            "api-daily-pricing": "api-daily-pricing",
+            "api-currencies": "api-currencies"
+        },
+        "prefix_message": "conventional-commit"
+    },
+    "develop": {
+        "step": "append_branches",
+        "branches": [
+            "init",
+            "webapp-weaved",
+            "merged-branches"
+        ]
+    },
+    "report": {
+        "step": "show_branch",
+        "branch": "develop",
+        "named_heads": [
+            "develop-mergepoint",
+            "webapp/init",
+            "webapp/main",
+            "webapp-shared/init",
+            "webapp-shared/develop",
+            "webapp-api/init",
+            "webapp-api/develop",
+            "webapp-frontend/init",
+            "webapp-frontend/develop",
+            "api-daily-pricing/init",
+            "api-daily-pricing/develop",
+            "api-currencies/init",
+            "api-currencies/develop"
+        ]
+    },
+    "output": {
+        "step": "write_branch",
+        "branch": "develop",
+        "prefix": "upstream",
+        "include_branches": "**",
+        "exclude_branches": "**/init"
+    },
+    "write_branch_names": {
+        "step": "write_branch_names",
+        "branch": "develop",
+        "output_filename": "names.txt"
+    }
+}
