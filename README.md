@@ -45,13 +45,13 @@ Write your config file `monorepo.json`, and run the tool.
 This creates a `monorepo.git` subdirectory, containing the insides of a git repo.
 
 ```
-$ ./ratking.py build monorepo
+$ ./ratking.py build monorepo.json
 ```
 
 Run the tool again, forcing it to update the local copies:
 
 ```
-$ ./ratking.py build monorepo --fetch
+$ ./ratking.py build monorepo.json --fetch
 ```
 
 ## Configuration
