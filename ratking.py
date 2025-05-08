@@ -46,7 +46,7 @@ class TimeTravel(Exception):
     pass
 
 
-class NonLinear(Exception):
+class MergeError(Exception):
     pass
 
 
@@ -713,12 +713,13 @@ class GitBranch:
                 if idx in g.commits:
                     i = h.pop()
                     if idx != i:
-                        raise NonLinear(
-                            "Merged linear history does not respect individual branch linear history"
+                        raise MergeError(
+                            f"New merged history contains commits that are in branch {name}, "
+                            "but not in the history to be merged for the branch."
                         )
             if h:
-                raise NonLinear(
-                    "Merged linear history does include individual branch linear history"
+                raise MergeError(
+                    f"New merged history does not contain all commits from {name} to be merged"
                 )
 
         return new_history, branch_history, branch_linear_parent, merged_graph
@@ -793,10 +794,10 @@ class GitBranch:
         linear_depth = [linear_parent[x] for x in history]
 
         if linear_depth != sorted(linear_depth):
-            raise NonLinear("First parent history is not in order")
+            raise Bug("New merged history is numbered out of order")
 
         if set(merged_graph.commits) != set(linear_parent):
-            raise Error("Linear parent does not cover all graph")
+            raise Bug("linear parent for graph does not contain all graph elements")
 
         # ensure linear ordering of source branches is preserved in merged branch
 
@@ -810,16 +811,18 @@ class GitBranch:
                     if linear_parent[c] != 0:
                         # xxx - we exclude extra tails and shouldn't fold them in
                         # xxx - and we error elsewhere about it
-                        raise NonLinear(
-                            "Commit in original branch has new linear parent in merged branch"
+                        raise MergeError(
+                            "Extra tail commit is marked as not-merged but has been merged in new branch"
                         )
-                lp = branch_linear_parent[name][c]
-                lp_idx = branch_history[name][lp - 1]
-                nlp = linear_parent[lp_idx]
-                if nlp != linear_parent[c]:
-                    raise NonLinear(
-                        "Commit in original branch has new linear parent in merged branch"
-                    )
+                else:
+                    lp = branch_linear_parent[name][c]
+                    lp_idx = branch_history[name][lp - 1]
+                    nlp = linear_parent[lp_idx]
+                    if nlp != linear_parent[c]:
+                        raise MergeError(
+                            f"Commit in {name} was numbered {lp} pre-merge, and has number {linear_parent[c]} in the merged branch, "
+                            f"which does not match the parent {lp} commit's new number of {nlp},"
+                        )
 
         # fix commits
 
@@ -1367,11 +1370,20 @@ class GitRepo:
     ):
 
         graph_prefix = {}
+
+        branch_tails = set()
         for name, branch in branches.items():
             for c in branch.graph.commits:
                 if c not in graph_prefix:
                     graph_prefix[c] = set()
                 graph_prefix[c].add(name)
+
+            branch_tails.add(branch.tail)
+
+        for name, branch in branches.items():
+            for t in branch.graph.tails:
+                if t != branch.tail and t in branch_tails:
+                    raise MergeError("Branch has extra init commit that overlaps with to be merged branches")
 
         merged_branch = GitBranch.interweave(
             new_name,
