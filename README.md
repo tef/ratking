@@ -28,7 +28,9 @@ It also means you don't have to do everything at once.
 I have only tested this code in production settings. There is an unholy amount of defensive
 code, and for good reason. As much as I have strived for correctness, I cannot be responsible for bugs, faults, or problems that result. 
 
-The code merges each of the upstream repos by their first-parent commit history. In other words, if your repo has more than one init commit, you might have a bit of a bad time at first. Until you work out exactly which commits are at fault.
+The code has a special hidden feature flag, `STRICT_MODE`, which defaults to True. 
+
+If you have a bunch of extra init commits in your repo, you may want to turn it off. Strict mode complains if you have extra init commits that appear in other branches as the primary init commit. It also complains if any commit has a new distance from the oldest merged commit, after merging. It complains if commits that aren't marged to be interweaved directly appear in the new merged first parent history. It also prevents any new init commits from being added to the branch, when searching for related branches in remote repos.
 
 The error checking is also highly conservative. Multiple things that _could_ work are purposefully checked by assertions, so it's not the end of the world if the thing throws an error.
 

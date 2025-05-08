@@ -25,6 +25,25 @@ else:
     if sys.version_info.major < 3 or sys.version_info.minor < 13:
         raise Exception("python 3.13 is required")
 
+STRICT_MODE = True
+
+"""
+Given some branch B, and some first-parent history H, numbered 1..n,
+each commit is assigned max(parent.n), the oldest first-parent commit reachable.
+
+When we merge branches, we check that this value is unchanged after transformation.
+If the to be merged branches share common commits, then it is possible that
+a commit has a higher first-parent number after merging, and it not being a bug.
+
+Strict mode disallows this, and ensures the new commit has the same distance from the
+merged history.
+
+It is also possible for commits that are not on the first-arent history for one
+branch appear in the first parent history for another, Strict mode disallows this too.
+
+Strict mode also avoids including new init commits when scanning for related branches.
+"""
+
 GIT_DIR_MODE = 0o040_000
 GIT_FILE_MODE = 0o100_644
 GIT_FILE_MODE2 = 0o100_664
@@ -711,8 +730,9 @@ class GitBranch:
 
             for idx in new_history:
                 if idx in g.commits:
-                    i = h.pop()
-                    if idx != i:
+                    if idx == h[-1]:
+                        h.pop()
+                    elif STRICT_MODE:
                         raise MergeError(
                             f"New merged history contains commits that are in branch {name}, "
                             "but not in the history to be merged for the branch."
@@ -809,16 +829,15 @@ class GitBranch:
             for c in graph.commits:
                 if branch_linear_parent[name][c] == 0:
                     if linear_parent[c] != 0:
-                        # xxx - we exclude extra tails and shouldn't fold them in
-                        # xxx - and we error elsewhere about it
-                        raise MergeError(
-                            "Extra tail commit is marked as not-merged but has been merged in new branch"
-                        )
+                        if STRICT_MODE:
+                            raise MergeError(
+                                "Extra tail commit is marked as not-linear but has been marked linear in new merged branch"
+                            )
                 else:
                     lp = branch_linear_parent[name][c]
                     lp_idx = branch_history[name][lp - 1]
                     nlp = linear_parent[lp_idx]
-                    if nlp != linear_parent[c]:
+                    if nlp > linear_parent[c] or (STRICT_MODE and  nlp != linear_parent[c]):
                         raise MergeError(
                             f"Commit in {name} was numbered {lp} pre-merge, and has number {linear_parent[c]} in the merged branch, "
                             f"which does not match the parent {lp} commit's new number of {nlp},"
@@ -1146,10 +1165,12 @@ class GitRepo:
                 graph = self.get_graph(idx, replace_parents, known=branch_graph.commits)
                 graph.validate()
 
-                if all(f in branch_graph.commits for f in graph.tails):
-                    branch.add_named_fragment(name, idx, graph)
+                if STRICT_MODE:
+                    if all(f in branch_graph.commits for f in graph.tails):
+                        branch.add_named_fragment(name, idx, graph)
                 else:
-                    pass  # orphan branch or new tail commit
+                    if any(f in branch_graph.commits for f in graph.tails):
+                        branch.add_named_fragment(name, idx, graph)
 
         branch.validate()
         return branch
@@ -1380,10 +1401,11 @@ class GitRepo:
 
             branch_tails.add(branch.tail)
 
-        for name, branch in branches.items():
-            for t in branch.graph.tails:
-                if t != branch.tail and t in branch_tails:
-                    raise MergeError("Branch has extra init commit that overlaps with to be merged branches")
+        if STRICT_MODE:
+            for name, branch in branches.items():
+                for t in branch.graph.tails:
+                    if t != branch.tail and t in branch_tails:
+                        raise MergeError("Branch has extra init commit that overlaps with to be merged branches")
 
         merged_branch = GitBranch.interweave(
             new_name,
