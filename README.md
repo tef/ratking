@@ -25,14 +25,24 @@ It also means you don't have to do everything at once.
 
 ## Caveats
 
-I have only tested this code in production settings. There is an unholy amount of defensive
-code, and for good reason. As much as I have strived for correctness, I cannot be responsible for bugs, faults, or problems that result. 
+I have only tested this code in production settings. There is no test suite beyond the repos I have used this on at work.
 
-The code has a special hidden feature flag, `STRICT_MODE`, which defaults to True. 
+However, there is an unholy amount of defensive code, the graph is checked for correctness before and after several transformations, and I'm pretty sure it will work well enough if you give it a bit of encouragement.
 
-If you have a bunch of extra init commits in your repo, you may want to turn it off. Strict mode complains if you have extra init commits that appear in other branches as the primary init commit. It also complains if any commit has a new distance from the oldest merged commit, after merging. It complains if commits that aren't marged to be interweaved directly appear in the new merged first parent history. It also prevents any new init commits from being added to the branch, when searching for related branches in remote repos.
+Still, I cannot be responsible for bugs, faults, or problems that result. 
 
-The error checking is also highly conservative. Multiple things that _could_ work are purposefully checked by assertions, so it's not the end of the world if the thing throws an error.
+## Strict mode is on by default
+
+Strict mode determines how extra init commits are handled and tolerated. In strict mode: 
+    
+- Extra init commits can't be shared amongst branches when merging.
+- No branches with extra init commits are included when getting related branches
+- If a commit is on the to-be merged set for one branch, it must be true for any other branch that contains it.
+- For a branch, a commit has some depth from the to-be-merged set of commits, and this must not change after merging.
+
+When strict mode is off, extra init commits may end up being folded into the new merged history, despite
+not being on the linear history for a given branch, and thus end up with newer data from the merged history. 
+
 
 ## Quick-Start
 

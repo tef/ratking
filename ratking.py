@@ -28,20 +28,18 @@ else:
 STRICT_MODE = True
 
 """
-Given some branch B, and some first-parent history H, numbered 1..n,
-each commit is assigned max(parent.n), the oldest first-parent commit reachable.
+Strict mode determines how extra init commits are handled and tolerated.
 
-When we merge branches, we check that this value is unchanged after transformation.
-If the to be merged branches share common commits, then it is possible that
-a commit has a higher first-parent number after merging, and it not being a bug.
+In strict mode:
 
-Strict mode disallows this, and ensures the new commit has the same distance from the
-merged history.
+- Extra init commits can't be shared amongst branches when merging
+- No branches with extra init commits are included when getting related branches
+- If a commit is on the to-be merged set for one branch, it must be true for any other branch that contains it.
+- For a branch, a commit has some depth from the to-be-merged set of commits, and this must not change after merging.
 
-It is also possible for commits that are not on the first-arent history for one
-branch appear in the first parent history for another, Strict mode disallows this too.
+When strict mode is off, extra init commits may end up being folded into the new merged history, despite
+not being on the linear history for a given branch.
 
-Strict mode also avoids including new init commits when scanning for related branches.
 """
 
 GIT_DIR_MODE = 0o040_000
