@@ -34,11 +34,7 @@ In strict mode:
 
 - Extra init commits can't be shared amongst branches when merging
 - No branches with extra init commits are included when getting related branches
-- If a commit is on the to-be merged set for one branch, it must be true for any other branch that contains it.
 - For a branch, a commit has some depth from the to-be-merged set of commits, and this must not change after merging.
-
-When strict mode is off, extra init commits may end up being folded into the new merged history, despite
-not being on the linear history for a given branch.
 
 """
 
@@ -730,10 +726,9 @@ class GitBranch:
                 if idx in g.commits:
                     if idx == h[-1]:
                         h.pop()
-                    elif STRICT_MODE:
+                    else:
                         raise MergeError(
-                            f"New merged history contains commits that are in branch {name}, "
-                            "but not in the history to be merged for the branch."
+                            f"New merged history contains commits that are in branch {name}, but were merged in from another branch"
                         )
             if h:
                 raise MergeError(
@@ -1404,6 +1399,7 @@ class GitRepo:
                 for t in branch.graph.tails:
                     if t != branch.tail and t in branch_tails:
                         raise MergeError("Branch has extra init commit that overlaps with to be merged branches")
+                        # triggers other error
 
         merged_branch = GitBranch.interweave(
             new_name,

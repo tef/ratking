@@ -37,12 +37,12 @@ Strict mode determines how extra init commits are handled and tolerated. In stri
     
 - Extra init commits can't be shared amongst branches when merging.
 - No branches with extra init commits are included when getting related branches
-- If a commit is on the to-be merged set for one branch, it must be true for any other branch that contains it.
 - For a branch, a commit has some depth from the to-be-merged set of commits, and this must not change after merging.
 
-When strict mode is off, extra init commits may end up being folded into the new merged history, despite
-not being on the linear history for a given branch, and thus end up with newer data from the merged history. 
-
+Turning it off might not solve any of your problems. If you have a branch with extra init commits
+that appear in other branches, you may end up in a situation where the linear history is no longer
+truly linear, i.e you get two sets of commits from the same branch being interwoven, and the code
+will still complain about it.
 
 ## Quick-Start
 
