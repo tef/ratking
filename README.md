@@ -31,6 +31,14 @@ However, there is an unholy amount of defensive code, the graph is checked for c
 
 Still, I cannot be responsible for bugs, faults, or problems that result. 
 
+One thing that remains unsupported: If you try to merge repos that have commits in common, but do not have
+the same first commit, you're going to have a bad time. Merging different repo histories works because these 
+histories are non-overlapping. Merging repo histories with a common prefix doesn't cause 
+any issues either, it is only when diverging histories are combined that there is an issue.
+
+In particular, it's only when two branches have overlapping commits, but nonoverlapping histories that a merge will fail.
+
+
 ## Strict mode is on by default
 
 Strict mode determines how extra init commits are handled and tolerated. In strict mode: 
