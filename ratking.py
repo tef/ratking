@@ -1313,6 +1313,42 @@ class GitRepo:
 
         return new_branch
 
+    def reparent_branch(self, branch):
+        reachable = {}
+
+        for idx in branch.graph.walk_children():
+            r = set()
+
+            for p in branch.graph.parents[idx]:
+                r.update(reachable[p])
+            r.add(idx)
+            reachable[idx] = r
+
+        writer = GitWriter(self, branch.name)
+
+        bump = 0
+
+        def reparent(writer, idx, commit, ctree):
+            nonlocal bump
+            if len(commit.parents) == 2:
+                p1, p2 = commit.parents
+                o1, o2 = writer.replaces[p1], writer.replaces[p2]
+                if o1 in reachable[o2]:
+                    commit.parents = [p2, p1]
+                    bump += 1
+            return commit, ctree
+
+        writer.graft(branch, rewrite=(reparent,))
+        print("can fix", bump)
+
+        new_branch = writer.to_branch()
+
+        for x, y in zip(branch.graph.walk_children(), new_branch.graph.walk_children()):
+            if writer.grafted(x) != y:
+                raise Bug("Grafted branch out of sync with input branch")
+
+        return new_branch
+
     def prefix_branch(self, branch, prefix):
         writer = GitWriter(self, branch.name)
 
@@ -1600,7 +1636,7 @@ class GitBuilder:
     @classmethod
     def make_action(self, name, step, config):
         deps = set()
-        if step in ("show_branch", "write_branch", "write_branch_names"):
+        if step in ("show_branch", "write_branch", "write_branch_names", "reparent_branch"):
             deps.add(config["branch"])
         elif step == "append_branches":
             deps.update(config["branches"])
@@ -1818,7 +1854,22 @@ class GitBuilder:
                 branch, bad_files=bad_files, replace_names=replace_names
             )
 
+        if config.get("reparent_branch"):
+            branch = self.repo.reparent_branch(branch)
+
         self.branches[name] = branch
+
+    @BuildSteps.add("reparent_branch")
+    def reparent_branch(self, name, config):
+        branch_name = config["branch"]
+        branch = self.branches[branch_name]
+        self.report("reparenting branch", branch_name)
+
+        branch = self.repo.reparent_branch(
+            branch,
+        )
+        self.branches[name] = branch
+
 
     @BuildSteps.add("start_branch")
     def start_branch(self, name, config):
