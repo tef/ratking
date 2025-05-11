@@ -697,18 +697,17 @@ class GitBranch:
 
         # validate new history
 
-        if STRICT_MODE:
-            seen = set()
-            new_history2 = []
+        seen = set()
+        new_history2 = []
 
-            for h in branch_history.values():
-                new_history2.extend(x for x in h if x not in seen)
-                seen.update(h)
+        for h in branch_history.values():
+            new_history2.extend(x for x in h if x not in seen)
+            seen.update(h)
 
-            new_history2.sort(key=lambda idx: merged_graph.commits[idx].max_date)
+        new_history2.sort(key=lambda idx: merged_graph.commits[idx].max_date)
 
-            if new_history != new_history2:
-                raise TimeTravel("Merged branch somehow out of date order")
+        if new_history != new_history2:
+            raise TimeTravel("Merged branch somehow out of date order")
 
         head = new_history[-1]
         tail = new_history[0]
