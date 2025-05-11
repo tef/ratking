@@ -1319,8 +1319,9 @@ class GitRepo:
         for idx in branch.graph.walk_children():
             r = set()
 
-            for p in branch.graph.parents[idx]:
-                r.update(reachable[p])
+            p = branch.graph.parents[idx]
+            if p:
+                r.update(reachable[p[0]])
             r.add(idx)
             reachable[idx] = r
 
