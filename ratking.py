@@ -1314,6 +1314,7 @@ class GitRepo:
         return new_branch
 
     def reparent_branch(self, branch):
+        self.report("   ", "reparenting branch")
         reachable = {}
 
         for idx in branch.graph.walk_children():
@@ -1325,28 +1326,41 @@ class GitRepo:
             r.add(idx)
             reachable[idx] = r
 
+        old_history = branch.graph.first_parents(branch.head)
+
         writer = GitWriter(self, branch.name)
 
         bump = 0
 
         def reparent(writer, idx, commit, ctree):
             nonlocal bump
-            if len(commit.parents) == 2:
-                p1, p2 = commit.parents
-                o1, o2 = writer.replaces[p1], writer.replaces[p2]
-                if o1 in reachable[o2]:
-                    commit.parents = [p2, p1]
-                    bump += 1
+            if len(commit.parents) > 1:
+                first = commit.parents[0]
+                f = writer.replaces[first]
+
+                out = []
+                for x in commit.parents[1:]:
+                    y = writer.replaces[x]
+                    if f in reachable[y]:
+                        out.append(first)
+                        first, f = x, y
+                    else:
+                        out.append(x)
+                commit.parents = [first] + out
             return commit, ctree
 
         writer.graft(branch, rewrite=(reparent,))
-        print("can fix", bump)
+        self.report("   ", "changed", bump, "commits")
 
         new_branch = writer.to_branch()
 
         for x, y in zip(branch.graph.walk_children(), new_branch.graph.walk_children()):
             if writer.grafted(x) != y:
                 raise Bug("Grafted branch out of sync with input branch")
+
+        new_history = new_branch.graph.first_parents(new_branch.head)
+
+        self.report("   ", "history was", len(old_history), "now", len(new_history))
 
         return new_branch
 
