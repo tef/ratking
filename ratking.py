@@ -338,8 +338,11 @@ class GitGraph:
             original=original,
         )
 
-    def walk_children(self):
-        search = list(self.tails)
+    def walk_children(self, start=None):
+        if start is None:
+            search = list(self.tails)
+        else:
+            search = list(start)
         counts = dict(self.parent_count)
 
         search.sort(key=lambda x: self.commits[x].max_date)
@@ -353,8 +356,11 @@ class GitGraph:
                 if counts[i] == 0:
                     search.append(i)
 
-    def walk_parents(self):
-        search = list(self.heads)
+    def walk_parents(self, start=None):
+        if start is None:
+            search = list(self.heads)
+        else:
+            search = list(start)
         counts = dict(self.child_count)
 
         while search:
