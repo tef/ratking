@@ -1875,6 +1875,9 @@ class GitBuilder:
         if config.get("reparent_branch"):
             branch = self.repo.reparent_branch(branch)
 
+        count = sum(len(x) > 1 for x in branch.graph.parents.values())
+        self.report("   ", "total commits", len(branch.graph.commits), "total merge commits", count)
+
         self.branches[name] = branch
 
     @BuildSteps.add("reparent_branch")
@@ -1950,6 +1953,7 @@ class GitBuilder:
     def show_branch(self, name, config):
         branch = self.branches[config["branch"]]
         named_heads = config["named_heads"]
+        graph = branch.graph
 
         report = []
 
@@ -1959,7 +1963,7 @@ class GitBuilder:
 
         for name in named_heads:
             new = branch.named_heads[name]
-            date = branch.graph.commits[new].max_date
+            date = graph.commits[new].max_date
             old = branch.original.get(new, new)
             text = f"{name} (was {old})" if old else name
             report.append((date, new, text))
@@ -1970,6 +1974,9 @@ class GitBuilder:
             self.report("   ", nidx, text)
         self.report()
         self.report("   ", "new head:", branch.head)
+        self.report()
+        count = sum(len(x) > 1 for x in graph.parents.values())
+        self.report("   ", "total commits", len(graph.commits), "total merge commits", count)
 
     @BuildSteps.add("write_branch")
     def write_branch(self, name, config):
