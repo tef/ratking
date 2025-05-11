@@ -632,6 +632,9 @@ class GitBranch:
         graph.add_graph(other)
         self.named_heads[name] = head
 
+    def first_parents(self):
+        return self.graph.first_parents(self.head)
+
     @staticmethod
     def make_linear_parent(history, tails, children):
         linear_parent = {c: n for n, c in enumerate(history, 1)}
