@@ -1346,7 +1346,10 @@ class GitRepo:
                         first, f = x, y
                     else:
                         out.append(x)
-                commit.parents = [first] + out
+                new_parents = [first] + out
+                if new_parents != commit.parents:
+                    bump +=1
+                commit.parents = new_parents
             return commit, ctree
 
         writer.graft(branch, rewrite=(reparent,))
