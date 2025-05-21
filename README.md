@@ -22,6 +22,12 @@ It also means you don't have to do everything at once.
 - Re-run `ratking` to add new commits to `upstream/main`, and `git rebase` or `git merge` your working branch as normal.
 - When you're ready to make the switch, reopen PRs based on the migrated branches, like `upstream/UpstreamA/A1`. 
 
+## Algorithm notes
+
+- It pulls out a 'linear history' from each branch
+- It merges them by date
+- It then throws out any commits that would cause a conflict
+- It then creates the history
 
 ## Caveats
 
@@ -30,13 +36,6 @@ I have only tested this code in production settings. There is no test suite beyo
 However, there is an unholy amount of defensive code, the graph is checked for correctness before and after several transformations, and I'm pretty sure it will work well enough if you give it a bit of encouragement.
 
 Still, I cannot be responsible for bugs, faults, or problems that result. 
-
-One thing that remains unsupported: If you try to merge repos that have commits in common, but do not have
-the same first commit, you're going to have a bad time. Merging different repo histories works because these 
-histories are non-overlapping. Merging repo histories with a common prefix doesn't cause 
-any issues either, it is only when diverging histories are combined that there is an issue.
-
-In particular, it's only when two branches have overlapping commits, but nonoverlapping histories that a merge will fail.
 
 
 ## Strict mode is on by default
