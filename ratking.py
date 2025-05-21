@@ -26,6 +26,8 @@ else:
         raise Exception("python 3.13 is required")
 
 STRICT_MODE = True
+INCLUDE_ORPHANS = True
+FIX_GARBAGE = True
 
 """
 Strict mode determines how extra init commits are handled and tolerated.
@@ -660,11 +662,41 @@ class GitBranch:
 
         return linear_parent
 
+    @staticmethod
+    def make_linear_children(history, heads, parents):
+        ## for a given commit, we want to know the oldest
+        ## successor (child) commit in the linear history
+        ## so if 1 and 4 merge in some commit, they use 4
+        m = len(history)
+        linear_children = {c: n for n, c in enumerate(history, 0)}
+
+        for lc in reversed(history):
+            n = linear_children[lc]
+            search = list(parents.get(lc, ()))
+            while search:
+                c = search.pop(0)
+                if c not in linear_children:
+                    linear_children[c] = n
+                    search.extend(parents.get(c, ()))
+
+        for f in heads:
+            n = linear_children.get(f, m)
+            linear_children[f] = n
+            search = list(parents.get(f, ()))
+            while search:
+                c = search.pop(0)
+                if c not in linear_children:
+                    linear_children[c] = n
+                    search.extend(parents.get(c, ()))
+
+        return linear_children
+
     @classmethod
     def merge_linear_history(self, branches):
         graphs = {}
         branch_history = {}
         branch_linear_parent = {}
+        branch_linear_children = {}
 
         for name, branch in branches.items():
             graph = branch.graph
@@ -676,10 +708,13 @@ class GitBranch:
                 history, graph.tails, graph.children
             )
 
+            branch_linear_children[name] = GitBranch.make_linear_children(
+                history, graph.heads, graph.parents
+            )
         merged_graph = GitGraph.union(graphs)
 
         history = [list(h) for h in branch_history.values()]
-        new_history = []
+        new_history1 = []
 
         while history:
             next_head = [h[-1] for h in history]
@@ -687,7 +722,7 @@ class GitBranch:
             next_head.sort(key=lambda i: merged_graph.commits[i].max_date)
 
             c = next_head[-1]
-            new_history.append(c)
+            new_history1.append(c)
 
             for h in history:
                 if h[-1] == c:
@@ -696,7 +731,7 @@ class GitBranch:
             if any(not h for h in history):
                 history = [h for h in history if h]
 
-        new_history.reverse()
+        new_history1.reverse()
 
         # validate new history
 
@@ -709,8 +744,49 @@ class GitBranch:
 
         new_history2.sort(key=lambda idx: merged_graph.commits[idx].max_date)
 
-        if new_history != new_history2:
+        if new_history1 != new_history2:
             raise TimeTravel("Merged branch somehow out of date order")
+
+        # scrap bad commits
+        # recalculate history and linear history
+
+        new_history = new_history1
+
+        if FIX_GARBAGE:
+            for name, branch in branches.items():
+                graph = branch.graph
+                linear_children = branch_linear_children[name]
+
+                clean_history = []
+                b_history = []
+                min_lc = 0
+
+                for h in new_history:
+                    if h in graph.commits:
+                        lc = linear_children[h]
+                        if lc >= min_lc:
+                            b_history.append(h)
+                            clean_history.append(h)
+                            min_lc = lc
+                        else:
+                            pass 
+                            # print("skipping", h)
+                    else:
+                        clean_history.append(h)
+
+                new_history = clean_history
+
+                if branch_history[name] != b_history:
+                    pass
+                    # print("junk history")
+                branch_history[name] = b_history
+                branch_linear_parent[name] = GitBranch.make_linear_parent(
+                    b_history, graph.tails, graph.children
+                )
+
+        if new_history != new_history1:
+            pass
+            # print("history trimmed")
 
         head = new_history[-1]
         tail = new_history[0]
@@ -719,6 +795,9 @@ class GitBranch:
             raise Bug("Merged graph has tail with parent commits")
         if merged_graph.parents[tail]:
             raise Bug("Merged graph has tail with parent commits in graph")
+
+
+        # final linear history check
 
         for name, branch in branches.items():
             h = list(branch_history[name])
@@ -1161,11 +1240,11 @@ class GitRepo:
                 graph = self.get_graph(idx, replace_parents, known=branch_graph.commits)
                 graph.validate()
 
-                if STRICT_MODE:
-                    if all(f in branch_graph.commits for f in graph.tails):
+                if INCLUDE_ORPHANS:
+                    if any(f in branch_graph.commits for f in graph.tails):
                         branch.add_named_fragment(name, idx, graph)
                 else:
-                    if any(f in branch_graph.commits for f in graph.tails):
+                    if all(f in branch_graph.commits for f in graph.tails):
                         branch.add_named_fragment(name, idx, graph)
 
         branch.validate()
@@ -1411,6 +1490,11 @@ class GitRepo:
             t = GitTree(entries)
             tidx = self.write_tree(t)
 
+            parents = [prev] if prev else []
+            parents.extend(p for p in commit.parents if p != prev)
+
+            commit.parents = parents
+
             if fix_message:
                 commit.message = fix_message(commit, ", ".join(sorted(prefix)))
 
@@ -1419,7 +1503,7 @@ class GitRepo:
 
             c = GitCommit(
                 tree=tidx,
-                parents=([prev] if prev else []),
+                parents=parents,
                 author=commit.author,
                 committer=commit.committer,
                 message=commit.message,
@@ -1440,6 +1524,9 @@ class GitRepo:
         fix_message=None,
     ):
 
+        # XXX - fix message not applied properly to commits that are interwoven
+        #       as they obtain a new parent and sometimes turn into merge commits
+
         graph_prefix = {}
 
         branch_tails = set()
@@ -1451,7 +1538,7 @@ class GitRepo:
 
             branch_tails.add(branch.tail)
 
-        if STRICT_MODE:
+        if False: # STRICT_MODE:
             for name, branch in branches.items():
                 for t in branch.graph.tails:
                     if t != branch.tail and t in branch_tails:
