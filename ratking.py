@@ -836,7 +836,39 @@ class GitBranch:
                     f"New merged history does not contain all commits from {name} to be merged"
                 )
 
-        return new_history, branch_history, branch_linear_parent, merged_graph
+        new_parents = {}
+        prev = new_history[0]
+        for idx in new_history[1:]:
+            new_parents[idx] = prev
+            prev=idx
+            
+        new_tails = set(new_history)
+
+        for name, branch in branches.items():
+            graph = branch.graph
+            graphs[name] = graph
+
+            for idx in graph.tails:
+                if idx in new_tails:
+                    continue
+
+                p = None
+                i_date = graph.commits[idx].max_date
+
+                for h in new_history:
+                    if h not in graph.commits:
+                        continue
+                    h_date =  graph.commits[h].max_date
+                    if h_date < i_date:
+                        p = h
+                    else:
+                        break
+                if p is not None:
+                    print('folding tail', idx, p)
+                    new_parents[idx] = p
+                    new_tails.add(idx)
+
+        return new_history, branch_history, branch_linear_parent, merged_graph, new_parents
 
     @classmethod
     def interweave(
@@ -851,7 +883,7 @@ class GitBranch:
     ):
 
         # create a new linear history
-        history, branch_history, branch_linear_parent, merged_graph = (
+        history, branch_history, branch_linear_parent, merged_graph, new_parents = (
             cls.merge_linear_history(branches)
         )
 
@@ -860,8 +892,7 @@ class GitBranch:
         # rewrite the parents
         # note: could remove original linear parent, and not create a merge commit
 
-        prev = tail
-        for idx in history[1:]:
+        for idx, prev in new_parents.items():
             old_parents = merged_graph.commits[idx].parents
             new_parents = [prev] + [o for o in old_parents if o != prev]
 
@@ -874,10 +905,10 @@ class GitBranch:
 
             if idx in merged_graph.tails:
                 merged_graph.tails.remove(idx)
-            if idx != head and idx in merged_graph.heads:
-                merged_graph.heads.remove(idx)
 
-            prev = idx
+            if prev in merged_graph.heads:
+                merged_graph.heads.remove(prev)
+
 
         merged_graph.validate()
 
@@ -940,6 +971,8 @@ class GitBranch:
                             )
 
         # fix commits
+
+
 
         def merge_tree(prev_tree, tree, prefix):
             entries = [e for e in prev_tree.entries if e[1] not in prefix]
