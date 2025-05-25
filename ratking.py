@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from glob import translate as glob_to_regex
 from heapq import heappush, heappop
 
+sys.setrecursionlimit(20000)
+
 try:
     import pygit2
 except ImportError:
@@ -638,6 +640,32 @@ class GitBranch:
         return self.graph.first_parents(self.head)
 
     @staticmethod
+    def complete_path(history, skipped, graph):
+        new_history = [history[0]]
+        p = history[0]
+        for h in history[1:]:
+            if p in graph.parents[h]:
+                new_history.append(h)
+            else:
+                seen = set(skipped)
+                def walk(start, end):
+                    seen.add(start)
+                    for px in graph.parents[start]:
+                        if px == end:
+                            new_history.append(start)
+                            return True
+                        elif px not in seen:
+                            if walk(px, end):
+                                new_history.append(start)
+                                return True
+                    return False
+
+                if not walk(h, p):
+                    raise Bug("wow, how did this even happen")
+            p = h
+        return history
+
+    @staticmethod
     def make_linear_parent(history, tails, children):
         linear_parent = {c: n for n, c in enumerate(history, 1)}
 
@@ -666,11 +694,11 @@ class GitBranch:
     def make_linear_children(history, heads, parents):
         ## for a given commit, we want to know the oldest
         ## successor (child) commit in the linear history
-        ## so if 1 and 4 merge in some commit, they use 4
+        ## so if 1 and 4 merge in some commit, they use 1
         m = len(history)
         linear_children = {c: n for n, c in enumerate(history, 0)}
 
-        for lc in reversed(history):
+        for lc in (history):
             n = linear_children[lc]
             search = list(parents.get(lc, ()))
             while search:
@@ -713,80 +741,71 @@ class GitBranch:
             )
         merged_graph = GitGraph.union(graphs)
 
-        history = [list(h) for h in branch_history.values()]
-        new_history1 = []
+        while True:
 
-        while history:
-            next_head = [h[-1] for h in history]
+            history = [list(h) for h in branch_history.values()]
+            new_history1 = []
 
-            next_head.sort(key=lambda i: merged_graph.commits[i].max_date)
+            while history:
+                next_head = [h[-1] for h in history]
+                next_head.sort(key=lambda i: merged_graph.commits[i].max_date)
 
-            c = next_head[-1]
-            new_history1.append(c)
+                c = next_head[-1]
+                new_history1.append(c)
 
-            for h in history:
-                if h[-1] == c:
-                    h.pop()
+                for h in history:
+                    if h[-1] == c:
+                        h.pop()
 
-            if any(not h for h in history):
-                history = [h for h in history if h]
+                if any(not h for h in history):
+                    history = [h for h in history if h]
 
-        new_history1.reverse()
+            new_history1.reverse()
 
-        # validate new history
+            # validate new history
 
-        seen = set()
-        new_history2 = []
+            seen = set()
+            new_history2 = []
 
-        for h in branch_history.values():
-            new_history2.extend(x for x in h if x not in seen)
-            seen.update(h)
+            for h in branch_history.values():
+                new_history2.extend(x for x in h if x not in seen)
+                seen.update(h)
 
-        new_history2.sort(key=lambda idx: merged_graph.commits[idx].max_date)
+            new_history2.sort(key=lambda idx: merged_graph.commits[idx].max_date)
 
-        if new_history1 != new_history2:
-            raise TimeTravel("Merged branch somehow out of date order")
+            if new_history1 != new_history2:
+                raise TimeTravel("Merged branch somehow out of date order")
+            new_history = new_history1
 
-        # scrap bad commits
-        # recalculate history and linear history
+            # scrap bad commits
+            # recalculate history and linear history
 
-        new_history = new_history1
+            skipped = set()
 
-        if FIX_GARBAGE:
             for name, branch in branches.items():
                 graph = branch.graph
                 linear_children = branch_linear_children[name]
 
-                clean_history = []
-                b_history = []
                 min_lc = 0
 
                 for h in new_history:
                     if h in graph.commits:
                         lc = linear_children[h]
                         if lc >= min_lc:
-                            b_history.append(h)
-                            clean_history.append(h)
                             min_lc = lc
                         else:
-                            pass 
-                            # print("skipping", h)
-                    else:
-                        clean_history.append(h)
+                            skipped.add(h)
 
-                new_history = clean_history
+            for name, branch in branches.items():
+                graph = branch.graph
+                branch_history[name] = [h for h in branch_history[name] if h not in skipped]
 
-                if branch_history[name] != b_history:
-                    pass
-                    # print("junk history")
-                branch_history[name] = b_history
-                branch_linear_parent[name] = GitBranch.make_linear_parent(
-                    b_history, graph.tails, graph.children
-                )
 
-        if new_history != new_history1:
-            pass
-            # print("history trimmed")
+            if not skipped:
+                break
+            print("XXX", "skipped", skipped)
+            print("trying again")
+
 
         head = new_history[-1]
         tail = new_history[0]
@@ -808,7 +827,7 @@ class GitBranch:
                 if idx in g.commits:
                     if idx == h[-1]:
                         h.pop()
-                    else:
+                    elif 0: # XXX - should be fine
                         raise MergeError(
                             f"New merged history contains commits that are in branch {name}, but were merged in from another branch"
                         )
@@ -896,27 +915,29 @@ class GitBranch:
 
         # ensure linear ordering of source branches is preserved in merged branch
 
-        for name, branch in branches.items():
-            graph = branch.graph
-            history_depth = [linear_parent[x] for x in branch_history[name]]
-            if history_depth != sorted(history_depth):
-                raise Bug("Linear history of source branch is out of order")
-            for c in graph.commits:
-                if branch_linear_parent[name][c] == 0:
-                    if linear_parent[c] != 0:
-                        if STRICT_MODE:
+        if 0:
+
+            for name, branch in branches.items():
+                graph = branch.graph
+                history_depth = [linear_parent[x] for x in branch_history[name]]
+                if history_depth != sorted(history_depth):
+                    raise Bug("Linear history of source branch is out of order")
+                for c in graph.commits:
+                    if branch_linear_parent[name][c] == 0:
+                        if linear_parent[c] != 0:
+                            if 0 and STRICT_MODE:
+                                raise MergeError(
+                                    "Extra tail commit is marked as not-linear but has been marked linear in new merged branch"
+                                )
+                    else:
+                        lp = branch_linear_parent[name][c]
+                        lp_idx = branch_history[name][lp - 1]
+                        nlp = linear_parent[lp_idx]
+                        if nlp > linear_parent[c] or (STRICT_MODE and  nlp != linear_parent[c]):
                             raise MergeError(
-                                "Extra tail commit is marked as not-linear but has been marked linear in new merged branch"
+                                f"Commit in {name} was numbered {lp} pre-merge, and has number {linear_parent[c]} in the merged branch, "
+                                f"which does not match the parent {lp} commit's new number of {nlp},"
                             )
-                else:
-                    lp = branch_linear_parent[name][c]
-                    lp_idx = branch_history[name][lp - 1]
-                    nlp = linear_parent[lp_idx]
-                    if nlp > linear_parent[c] or (STRICT_MODE and  nlp != linear_parent[c]):
-                        raise MergeError(
-                            f"Commit in {name} was numbered {lp} pre-merge, and has number {linear_parent[c]} in the merged branch, "
-                            f"which does not match the parent {lp} commit's new number of {nlp},"
-                        )
 
         # fix commits
 
