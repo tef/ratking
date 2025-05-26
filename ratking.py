@@ -27,20 +27,7 @@ else:
     if sys.version_info.major < 3 or sys.version_info.minor < 13:
         raise Exception("python 3.13 is required")
 
-STRICT_MODE = True
-INCLUDE_ORPHANS = True
-FIX_GARBAGE = True
-
-"""
-Strict mode determines how extra init commits are handled and tolerated.
-
-In strict mode:
-
-- Extra init commits can't be shared amongst branches when merging
-- No branches with extra init commits are included when getting related branches
-- For a branch, a commit has some depth from the to-be-merged set of commits, and this must not change after merging.
-
-"""
+INCLUDE_ORPHANS = True # include branches with orphan init commits
 
 GIT_DIR_MODE = 0o040_000
 GIT_FILE_MODE = 0o100_644
@@ -720,7 +707,7 @@ class GitBranch:
         return linear_children
 
     @classmethod
-    def merge_linear_history(self, branches):
+    def merge_linear_history(self,  branches, report):
         graphs = {}
         branch_history = {}
         branch_linear_parent = {}
@@ -781,6 +768,7 @@ class GitBranch:
             # recalculate history and linear history
 
             skipped = set()
+            skipped_orig = {}
 
             for name, branch in branches.items():
                 graph = branch.graph
@@ -795,16 +783,17 @@ class GitBranch:
                             min_lc = lc
                         else:
                             skipped.add(h)
+                            skipped_orig[h] = branch.original.get(h, h)
 
             for name, branch in branches.items():
                 graph = branch.graph
                 branch_history[name] = [h for h in branch_history[name] if h not in skipped]
 
-
             if not skipped:
                 break
-            print("XXX", "skipped", skipped)
-            print("trying again")
+
+            report("   ", "skipped", ", ".join(s for s in skipped_orig.values()))
+            report("   ", "trying again")
 
 
         head = new_history[-1]
@@ -864,7 +853,7 @@ class GitBranch:
                     else:
                         break
                 if p is not None:
-                    print('folding tail', idx, p)
+                    report("   ",'folding tail', branch.original.get(idx,idx), "after", branch.original.get(p,p))
                     new_parents[idx] = p
                     new_tails.add(idx)
 
@@ -880,11 +869,12 @@ class GitBranch:
         fix_message=None,
         named_heads=None,
         merge_named_heads=(),
+        report=None
     ):
 
         # create a new linear history
         history, branch_history, branch_linear_parent, merged_graph, new_parents = (
-            cls.merge_linear_history(branches)
+            cls.merge_linear_history(branches, report)
         )
 
         head, tail = history[-1], history[0]
@@ -945,30 +935,8 @@ class GitBranch:
             raise Bug("linear parent for graph does not contain all graph elements")
 
         # ensure linear ordering of source branches is preserved in merged branch
-
-        if 0:
-
-            for name, branch in branches.items():
-                graph = branch.graph
-                history_depth = [linear_parent[x] for x in branch_history[name]]
-                if history_depth != sorted(history_depth):
-                    raise Bug("Linear history of source branch is out of order")
-                for c in graph.commits:
-                    if branch_linear_parent[name][c] == 0:
-                        if linear_parent[c] != 0:
-                            if 0 and STRICT_MODE:
-                                raise MergeError(
-                                    "Extra tail commit is marked as not-linear but has been marked linear in new merged branch"
-                                )
-                    else:
-                        lp = branch_linear_parent[name][c]
-                        lp_idx = branch_history[name][lp - 1]
-                        nlp = linear_parent[lp_idx]
-                        if nlp > linear_parent[c] or (STRICT_MODE and  nlp != linear_parent[c]):
-                            raise MergeError(
-                                f"Commit in {name} was numbered {lp} pre-merge, and has number {linear_parent[c]} in the merged branch, "
-                                f"which does not match the parent {lp} commit's new number of {nlp},"
-                            )
+        
+        # XXX - missing
 
         # fix commits
 
@@ -1592,13 +1560,6 @@ class GitRepo:
 
             branch_tails.add(branch.tail)
 
-        if False: # STRICT_MODE:
-            for name, branch in branches.items():
-                for t in branch.graph.tails:
-                    if t != branch.tail and t in branch_tails:
-                        raise MergeError("Branch has extra init commit that overlaps with to be merged branches")
-                        # triggers other error
-
         merged_branch = GitBranch.interweave(
             new_name,
             branches,
@@ -1606,6 +1567,7 @@ class GitRepo:
             fix_message=fix_message,
             named_heads=named_heads,
             merge_named_heads=merge_named_heads,
+            report=self.report,
         )
 
         writer = GitWriter(self, new_name)

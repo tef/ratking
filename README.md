@@ -4,9 +4,9 @@ Let's say you have two repositories, `UpstreamA` and `UpstreamB`.  `UpstreamA` h
 
 After running `ratking`, you now have one repository, and one `main` branch:
 
-- The `main` branch consists of all of the commits on `main` for the upstream repos, interweaved by commit date.
+- The new `main` branch consists of all of the commits from the upstream 'main' branches, interweaved by commit date.
 - Inside each commit is a `UpstreamA` subdirectory, and a `UpstreamB` subdirectory.
-- A commit on `UpstreamA` will have the version of `UpstreamB` where it joins `main`, and vice-versa
+- Commits that branch off `main` also contain `UpstreamA` and `UpstreamB`
 - There's also `UpstreamA/A1` branches, and `UpstreamB/B1` branches created alongside the new `main` branch.
 
 If you make some changes upstream, and run `ratking` again, all the new commits
@@ -24,10 +24,12 @@ It also means you don't have to do everything at once.
 
 ## Algorithm notes
 
-- It pulls out a 'linear history' from each branch
-- It merges them by date
-- It then throws out any commits that would cause a conflict
-- It then creates the history
+The merge is 'best effort':
+
+- It pulls out a 'linear history' from each branch, i.e the first-parent of each commit
+- It merges them by date, preserving the existing ordering of commits
+- It then throws out any commits that would cause a conflict when merging
+
 
 ## Caveats
 
@@ -36,20 +38,6 @@ I have only tested this code in production settings. There is no test suite beyo
 However, there is an unholy amount of defensive code, the graph is checked for correctness before and after several transformations, and I'm pretty sure it will work well enough if you give it a bit of encouragement.
 
 Still, I cannot be responsible for bugs, faults, or problems that result. 
-
-
-## Strict mode is on by default
-
-Strict mode determines how extra init commits are handled and tolerated. In strict mode: 
-    
-- Extra init commits can't be shared amongst branches when merging.
-- No branches with extra init commits are included when getting related branches
-- For a branch, a commit has some depth from the to-be-merged set of commits, and this must not change after merging.
-
-Turning it off might not solve any of your problems. If you have a branch with extra init commits
-that appear in other branches, you may end up in a situation where the linear history is no longer
-truly linear, i.e you get two sets of commits from the same branch being interwoven, and the code
-will still complain about it.
 
 ## Quick-Start
 
