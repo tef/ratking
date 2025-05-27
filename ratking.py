@@ -728,72 +728,69 @@ class GitBranch:
             )
         merged_graph = GitGraph.union(graphs)
 
-        while True:
+        history = [list(h) for h in branch_history.values()]
+        new_history1 = []
 
-            history = [list(h) for h in branch_history.values()]
-            new_history1 = []
+        while history:
+            next_head = [h[-1] for h in history]
+            next_head.sort(key=lambda i: merged_graph.commits[i].max_date)
 
-            while history:
-                next_head = [h[-1] for h in history]
-                next_head.sort(key=lambda i: merged_graph.commits[i].max_date)
+            c = next_head[-1]
+            new_history1.append(c)
 
-                c = next_head[-1]
-                new_history1.append(c)
+            for h in history:
+                if h[-1] == c:
+                    h.pop()
 
-                for h in history:
-                    if h[-1] == c:
-                        h.pop()
+            if any(not h for h in history):
+                history = [h for h in history if h]
 
-                if any(not h for h in history):
-                    history = [h for h in history if h]
+        new_history1.reverse()
 
-            new_history1.reverse()
+        # validate new history
 
-            # validate new history
+        seen = set()
+        new_history2 = []
 
-            seen = set()
-            new_history2 = []
+        for h in branch_history.values():
+            new_history2.extend(x for x in h if x not in seen)
+            seen.update(h)
 
-            for h in branch_history.values():
-                new_history2.extend(x for x in h if x not in seen)
-                seen.update(h)
+        new_history2.sort(key=lambda idx: merged_graph.commits[idx].max_date)
 
-            new_history2.sort(key=lambda idx: merged_graph.commits[idx].max_date)
+        if new_history1 != new_history2:
+            raise TimeTravel("Merged branch somehow out of date order")
+        new_history = new_history1
 
-            if new_history1 != new_history2:
-                raise TimeTravel("Merged branch somehow out of date order")
-            new_history = new_history1
+        # scrap bad commits
+        # recalculate history and linear history
 
-            # scrap bad commits
-            # recalculate history and linear history
+        skipped = set()
+        skipped_orig = {}
 
-            skipped = set()
-            skipped_orig = {}
+        for name, branch in branches.items():
+            graph = branch.graph
+            linear_children = branch_linear_children[name]
+            linear_parent = branch_linear_parent[name]
 
-            for name, branch in branches.items():
-                graph = branch.graph
-                linear_children = branch_linear_children[name]
+            min_lc = 0
+            min_lp = 0
 
-                min_lc = 0
+            for h in new_history:
+                if h in graph.commits:
+                    lc = linear_children[h]
+                    lp = linear_parent[h]
+                    if lc >= min_lc and lp >= min_lp:
+                        min_lc = lc
+                        min_lp = lp
+                    else:
+                        skipped.add(h)
+                        skipped_orig[h] = branch.original.get(h, h)
 
-                for h in new_history:
-                    if h in graph.commits:
-                        lc = linear_children[h]
-                        if lc >= min_lc:
-                            min_lc = lc
-                        else:
-                            skipped.add(h)
-                            skipped_orig[h] = branch.original.get(h, h)
+        new_history = [h for h in new_history if h not in skipped]
 
-            for name, branch in branches.items():
-                graph = branch.graph
-                branch_history[name] = [h for h in branch_history[name] if h not in skipped]
-
-            if not skipped:
-                break
-
+        if skipped:
             report("   ", "skipped", ", ".join(s for s in skipped_orig.values()))
-            report("   ", "trying again")
 
 
         head = new_history[-1]
@@ -808,7 +805,7 @@ class GitBranch:
         # final linear history check
 
         for name, branch in branches.items():
-            h = list(branch_history[name])
+            h = [x for x in branch_history[name] if x not in skipped]
             h.reverse()
             g = branch.graph
 
@@ -816,10 +813,6 @@ class GitBranch:
                 if idx in g.commits:
                     if idx == h[-1]:
                         h.pop()
-                    elif 0: # XXX - should be fine
-                        raise MergeError(
-                            f"New merged history contains commits that are in branch {name}, but were merged in from another branch"
-                        )
             if h:
                 raise MergeError(
                     f"New merged history does not contain all commits from {name} to be merged"
