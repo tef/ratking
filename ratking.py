@@ -559,6 +559,69 @@ class GitGraph:
         if walked != set(self.commits):
             raise Bug("Graph has unreachable commits from tails")
 
+    def min_linear_parent(self, history):
+        """ youngest commit this descends from on the given history """
+        linear_parent = {c: n for n, c in enumerate(history, 1)}
+        return self.walk_linear_parent(history, linear_parent)
+
+    def max_linear_parent(self, history):
+        linear_parent = {c: n for n, c in enumerate(history, 1)}
+        return self.walk_linear_parent(reversed(history), linear_parent)
+
+    def walk_linear_parent(self, history, linear_parent):
+        for lc in history:
+            n = linear_parent[lc]
+            search = list(self.children.get(lc, ()))
+            while search:
+                c = search.pop(0)
+                if c not in linear_parent:
+                    linear_parent[c] = n
+                    search.extend(self.children.get(c, ()))
+
+        for f in self.tails:
+            n = linear_parent.get(f, 0)
+            linear_parent[f] = n
+            search = list(self.children.get(f, ()))
+            while search:
+                c = search.pop(0)
+                if c not in linear_parent:
+                    linear_parent[c] = n
+                    search.extend(self.children.get(c, ()))
+
+        return linear_parent
+
+
+    def min_linear_children(self, history):
+        linear_children = {c: n for n, c in enumerate(history, 1)}
+        return self.walk_linear_children(history, linear_children)
+
+    def max_linear_children(self, history):
+        linear_children = {c: n for n, c in enumerate(history, 1)}
+        return self.walk_linear_children(reversed(history), linear_children)
+
+
+    def walk_linear_children(self, history, linear_children):
+        for lc in history:
+            n = linear_children[lc]
+            search = list(self.parents.get(lc, ()))
+            while search:
+                c = search.pop(0)
+                if c not in linear_children:
+                    linear_children[c] = n
+                    search.extend(self.parents.get(c, ()))
+
+        for f in self.heads:
+            n = linear_children.get(f, 0)
+            linear_children[f] = n
+            search = list(self.parents.get(f, ()))
+            while search:
+                c = search.pop(0)
+                if c not in linear_children:
+                    linear_children[c] = n
+                    search.extend(self.parents.get(c, ()))
+
+        return linear_children
+
 
 @dataclass
 class GitBranch:
@@ -626,140 +689,6 @@ class GitBranch:
     def first_parents(self):
         return self.graph.first_parents(self.head)
 
-    @staticmethod
-    def complete_path(history, skipped, graph):
-        new_history = [history[0]]
-        p = history[0]
-        for h in history[1:]:
-            if p in graph.parents[h]:
-                new_history.append(h)
-            else:
-                seen = set(skipped)
-                def walk(start, end):
-                    seen.add(start)
-                    for px in graph.parents[start]:
-                        if px == end:
-                            new_history.append(start)
-                            return True
-                        elif px not in seen:
-                            if walk(px, end):
-                                new_history.append(start)
-                                return True
-                    return False
-
-                if not walk(h, p):
-                    raise Bug("wow, how did this even happen")
-            p = h
-        return history
-
-    @staticmethod
-    def min_linear_parent(history, tails, children):
-        """ youngest commit this descends from on the given history """
-        linear_parent = {c: n for n, c in enumerate(history, 1)}
-
-        for lc in history:
-            n = linear_parent[lc]
-            search = list(children.get(lc, ()))
-            while search:
-                c = search.pop(0)
-                if c not in linear_parent:
-                    linear_parent[c] = n
-                    search.extend(children.get(c, ()))
-
-        for f in tails:
-            n = linear_parent.get(f, 0)
-            linear_parent[f] = n
-            search = list(children.get(f, ()))
-            while search:
-                c = search.pop(0)
-                if c not in linear_parent:
-                    linear_parent[c] = n
-                    search.extend(children.get(c, ()))
-
-        return linear_parent
-
-    @staticmethod
-    def max_linear_parent(history, tails, children):
-        linear_parent = {c: n for n, c in enumerate(history, 1)}
-
-        for lc in reversed(history):
-            n = linear_parent[lc]
-            search = list(children.get(lc, ()))
-            while search:
-                c = search.pop(0)
-                if c not in linear_parent:
-                    linear_parent[c] = n
-                    search.extend(children.get(c, ()))
-
-        for f in tails:
-            n = linear_parent.get(f, 0)
-            linear_parent[f] = n
-            search = list(children.get(f, ()))
-            while search:
-                c = search.pop(0)
-                if c not in linear_parent:
-                    linear_parent[c] = n
-                    search.extend(children.get(c, ()))
-
-        return linear_parent
-
-    @staticmethod
-    def min_linear_children(history, heads, parents):
-        ## for a given commit, we want to know the earliest
-        ## successor (child) commit in the linear history
-        ## so if 1 and 4 merge in some commit, they use 1
-        m = len(history) + 1
-        linear_children = {c: n for n, c in enumerate(history, 1)}
-
-        for lc in (history):
-            n = linear_children[lc]
-            search = list(parents.get(lc, ()))
-            while search:
-                c = search.pop(0)
-                if c not in linear_children:
-                    linear_children[c] = n
-                    search.extend(parents.get(c, ()))
-
-        for f in heads:
-            n = linear_children.get(f, m)
-            linear_children[f] = n
-            search = list(parents.get(f, ()))
-            while search:
-                c = search.pop(0)
-                if c not in linear_children:
-                    linear_children[c] = n
-                    search.extend(parents.get(c, ()))
-
-        return linear_children
-
-    @staticmethod
-    def max_linear_children(history, heads, parents):
-        ## for a given commit, we want to know the latest
-        ## successor (child) commit in the linear history
-        ## so if 1 and 4 merge in some commit, they use 4
-        m = len(history) + 1 
-        linear_children = {c: n for n, c in enumerate(history, 1)}
-
-        for lc in reversed(history):
-            n = linear_children[lc]
-            search = list(parents.get(lc, ()))
-            while search:
-                c = search.pop(0)
-                if c not in linear_children:
-                    linear_children[c] = n
-                    search.extend(parents.get(c, ()))
-
-        for f in heads:
-            n = linear_children.get(f, m)
-            linear_children[f] = n
-            search = list(parents.get(f, ()))
-            while search:
-                c = search.pop(0)
-                if c not in linear_children:
-                    linear_children[c] = n
-                    search.extend(parents.get(c, ()))
-
-        return linear_children
 
     @classmethod
     def merge_linear_history(self,  branches, report):
@@ -773,9 +702,7 @@ class GitBranch:
 
             history = graph.first_parents(branch.head)
             branch_history[name] = history
-            branch_linear_parent[name] = GitBranch.max_linear_parent(
-                history, graph.tails, graph.children
-            )
+            branch_linear_parent[name] = graph.max_linear_parent(history)
 
         merged_graph = GitGraph.union(graphs)
 
@@ -822,13 +749,9 @@ class GitBranch:
         for name, branch in branches.items():
             graph = branch.graph
             history = branch_history[name]
-            linear_parent = GitBranch.max_linear_parent(
-                history, graph.tails, graph.children
-            )
+            linear_parent = branch_linear_parent[name]
 
-            linear_children = GitBranch.max_linear_children(
-                history, graph.heads, graph.parents
-            )
+            linear_children = graph.max_linear_children(history)
 
             ## we only need to filter ones on our linear history
             ## conflicts in non first parent commits are handled 
@@ -983,9 +906,7 @@ class GitBranch:
 
         # fill out linear parents
 
-        linear_parent = GitBranch.max_linear_parent(
-            history, merged_graph.tails, merged_graph.children
-        )
+        linear_parent = merged_graph.max_linear_parent(history)
 
         # validate linear parents
 
