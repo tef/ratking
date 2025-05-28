@@ -1,13 +1,3 @@
----
-todo: |
-    - readme should be walkthrough of running a merge by hand
-    - each step is a command and example output
-    - introduce it as "fancy octopus merge"
-    - explain octopus merge, and then basic algorithm
-    - full algorithm
-    - command reference / scripting
----
-
 # `ratking`: tie git repositories together
 
 
