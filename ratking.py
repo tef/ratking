@@ -859,6 +859,10 @@ class GitBranch:
         if skipped:
             report("   ", "skipped", ", ".join(s for s in skipped_orig.values()))
 
+        for name, branch in branches.items():
+            if branch.head in skipped:
+                raise MergeError(f"branch head {name} in conflict")
+
         head = new_history[-1]
         tail = new_history[0]
 
