@@ -1,4 +1,15 @@
+---
+todo: |
+    - readme should be walkthrough of running a merge by hand
+    - each step is a command and example output
+    - introduce it as "fancy octopus merge"
+    - explain octopus merge, and then basic algorithm
+    - full algorithm
+    - command reference / scripting
+---
+
 # `ratking`: tie git repositories together
+
 
 Let's say you have two repositories, `UpstreamA` and `UpstreamB`.  `UpstreamA` has several feature branches open `A1`, `A2`, ... and similiarly `UpstreamB` has `B1`, `B2`, etc.
 

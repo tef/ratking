@@ -78,52 +78,6 @@ class Callbacks:
         return _add
 
 
-@dataclass
-class BuildStep:
-    name: str
-    step: str
-    config: dict
-    dependencies: set
-
-    @classmethod
-    def sort(self, steps):
-        """Given a dict of {name: build_step}, this method returns
-        a new dict in a stable topologically sorted order. If the
-        dict is already in order, it will return the same value.
-        """
-
-        search = []
-        number = {}
-        pred = defaultdict(set)
-        count = {}
-
-        for n, (name, action) in enumerate(steps.items()):
-            number[name] = n
-            count[name] = len(action.dependencies)
-            if count[name] == 0:
-                search.append((n, name))
-            for d in action.dependencies:
-                pred[d].add(name)
-
-        output = {}
-
-        while search:
-            # of the work ready to go, i.e no dependencies left
-            # we pick the action that appeared earliest in the file
-            _, name = heappop(search)
-            output[name] = steps[name]
-
-            for d in pred[name]:
-                count[d] -= 1
-                if count[d] == 0:
-                    heappush(search, (number[d], d))
-
-        if set(steps) != set(output):
-            raise Bug("Steps missing after sorting")
-
-        return output
-
-
 @functools.cache
 def compile_pattern(pattern):
     regex = glob.translate(pattern, recursive=True)
@@ -590,7 +544,6 @@ class GitGraph:
 
         return linear_parent
 
-
     def min_linear_children(self, history):
         linear_children = {c: n for n, c in enumerate(history, 1)}
         return self.walk_linear_children(history, linear_children)
@@ -598,7 +551,6 @@ class GitGraph:
     def max_linear_children(self, history):
         linear_children = {c: n for n, c in enumerate(history, 1)}
         return self.walk_linear_children(reversed(history), linear_children)
-
 
     def walk_linear_children(self, history, linear_children):
         for lc in history:
@@ -754,7 +706,7 @@ class GitBranch:
             linear_children = graph.max_linear_children(history)
 
             ## we only need to filter ones on our linear history
-            ## conflicts in non first parent commits are handled 
+            ## conflicts in non first parent commits are handled
             ## in the branches that introduced them into the history
 
             conflicts = []
@@ -816,7 +768,7 @@ class GitBranch:
         for idx in new_history[1:]:
             new_parents[idx] = prev
             prev=idx
-            
+
         new_tails = set(new_history)
 
         for name, branch in branches.items():
@@ -919,7 +871,7 @@ class GitBranch:
             raise Bug("linear parent for graph does not contain all graph elements")
 
         # ensure linear ordering of source branches is preserved in merged branch
-        
+
         # XXX - missing
         # issue was that some items dropped from history
         # but should check that "max_parent" is the same
@@ -1702,44 +1654,72 @@ class GitWriter:
             self.repo.get_commit(v)
         return self.head
 
+def invert_replacement_names(replace_names):
+    replace = {}
+    for name, r in replace_names.items():
+        for x in r:
+            replace[x] = name
+
+    return replace
+
+@dataclass
+class BuildStep:
+    name: str
+    step: str
+    config: dict
+    dependencies: set
+
+
 
 class GitBuilder:
     BuildSteps = Callbacks()
 
-    def __init__(self, repo=None, *, report=None, config_dir=None):
+    def __init__(self, repo=None, *, report=None):
         self.repo = repo
         self.fetched = set()
         self.branches = {}
         self.report = report if report else lambda *a, **k: None
-        self.loaded = {}
-        self.replace_names = {}
-        self.config_dir = config_dir
 
-    def sort_steps(self, steps):
-        output = BuildStep.sort(steps)
+    @classmethod
+    def sort_steps(cls, step_list):
+        """Given a list of build_steps, this method returns
+        a new list in a stable topologically sorted order. If the
+        list is already in order, it will return the same value.
+        """
 
-        if list(steps) == list(output):
-            self.report("running steps in given order:", ", ".join(output))
-        else:
-            self.report("running steps in dependency order:", ", ".join(output))
-        self.report()
+        search = []
+        number = {}
+        pred = defaultdict(set)
+        count = {}
+        steps = {}
 
-        return output.items()
+        for n, action in enumerate(step_list):
+            name = action.name
+            number[name] = n
+            count[name] = len(action.dependencies)
+            if count[name] == 0:
+                search.append((n, name))
+            for d in action.dependencies:
+                pred[d].add(name)
+            steps[name] = action
 
-    def run(self, steps, refresh=False):
-        if refresh:
-            self.fetched = set()
+        output = []
 
-        for name, action in self.sort_steps(steps):
-            step, config = action.step, action.config
-            if step not in self.BuildSteps:
-                raise Bug(f"Bad step for {name}: {step}")
-            callback = self.BuildSteps[step]
-            config["refresh"] = refresh
-            callback(self, name, config)
-            self.report()
+        while search:
+            # of the work ready to go, i.e no dependencies left
+            # we pick the action that appeared earliest in the file
+            _, name = heappop(search)
+            output.append(steps[name])
 
-        return self.branches
+            for d in pred[name]:
+                count[d] -= 1
+                if count[d] == 0:
+                    heappush(search, (number[d], d))
+
+        if set(steps) != set(s.name for s in output):
+            raise Bug("Steps missing after sorting")
+
+        return output
 
     @classmethod
     def make_action(self, name, step, config):
@@ -1754,78 +1734,87 @@ class GitBuilder:
         return BuildStep(name, step, config, deps)
 
     @classmethod
+    def make_action_config(self, config_dir, config):
+        replace = {k[:-5]:v for k,v in config.items() if k.endswith(".json")}
+
+        loaded = {}
+
+        for name, filename in replace.items():
+            filename = os.path.join(config_dir, filename)
+            if filename not in loaded:
+                with open(filename, "r+") as fh:
+                    out = json.load(fh)
+                loaded[filename] = out
+            config[name] = loaded[filename]
+            del config[f"{name}.json"]
+
+        replace = {k:v for k,v in config.items() if k in ("filename", "output_filename")}
+
+        for name, value in replace.items():
+            print(name, value)
+            config[name] = os.path.join(config_dir, value)
+            print(name, config[name])
+
+        return config
+
+    @classmethod
     def load_config_file(cls, filename):
+        config_dir = os.path.dirname(filename)
+
         with open(filename, "r+") as fh:
-            builder_config_raw = json.load(fh)
+            raw_config = json.load(fh)
 
-        builder_config = {}
+        steps = []
 
-        if isinstance(builder_config_raw, list):
-            for item in builder_config_raw:
+        if isinstance(raw_config, list):
+            for item in raw_config:
                 name = item.pop("name")
                 step = item.pop("step")
-                builder_config[name] = cls.make_action(name, step, item)
+                item = cls.make_action_config(config_dir, item)
+                steps.append( cls.make_action(name, step, item))
 
-        elif isinstance(builder_config_raw, dict):
-            for name, item in builder_config_raw.items():
+        elif isinstance(raw_config, dict):
+            for name, item in raw_config.items():
                 step = item.pop("step")
-                builder_config[name] = cls.make_action(name, step, item)
+                item = cls.make_action_config(config_dir, item)
+                steps.append( cls.make_action(name, step, item))
         else:
             raise Error("builder config is of unsupported type")
 
-        config_dir = os.path.dirname(filename)
-        return config_dir, builder_config
+        return steps
 
-    def load_json(self, filename):
-        if self.config_dir is None:
-            raise Error("no config dir set")
-        filename = os.path.join(self.config_dir, filename)
-        if filename in self.loaded:
-            return self.loaded[filename]
-        with open(filename, "r+") as fh:
-            out = json.load(fh)
 
-        self.loaded[filename] = out
-        return out
+    def run(self, steps, refresh=False):
+        if refresh:
+            self.fetched = set()
 
-    def load_badfiles(self, bad_files):
-        if bad_files is None:
-            return None
-        if isinstance(bad_files, dict):
-            return bad_files
-        elif isinstance(bad_files, str):
-            out = self.load_json(bad_files)
-            return out
+        sorted_steps = self.sort_steps(steps)
+
+        old_names = ", ".join(s.name for s in steps)
+        names = ", ".join(s.name for s in sorted_steps)
+
+        if old_names == names:
+            self.report("running steps in given order:", (names))
         else:
-            raise Bug("unsupported bad_files")
+            self.report("running steps in dependency order:", (names))
+        self.report()
 
-    def load_replacement_names(self, replace_names):
-        if replace_names is None:
-            return None
-        elif isinstance(replace_names, dict):
-            pass
-        elif isinstance(replace_names, str):
-            replace_names = self.load_json(replace_names)
-        else:
-            raise Bug("unsupported replace_names")
+        for action in sorted_steps:
+            name, step, config = action.name, action.step, action.config
+            if step not in self.BuildSteps:
+                raise Bug(f"Bad step for {name}: {step}")
+            callback = self.BuildSteps[step]
+            config["refresh"] = refresh
+            callback(self, name, config)
+            self.report()
 
-        if id(replace_names) in self.replace_names:
-            return self.replace_names[id(replace_names)]
+        return self.branches
 
-        replace = {}
-        for name, r in replace_names.items():
-            for x in r:
-                replace[x] = name
-
-        self.replace_names[id(replace_names)] = replace
-
-        return replace
 
     @BuildSteps.add("load_repository")
     def load_repository(self, name, config):
-        path = config.get("path", name)
+        path = config.get("filename", name)
         bare = config.get("bare", True)
-        path = os.path.join(self.config_dir, path)
         self.repo = GitRepo(path, bare=bare, report=self.report)
         self.report("opened repo from config:", self.repo.path)
 
@@ -1884,8 +1873,7 @@ class GitBuilder:
         replace_names = config.get("replace_names")
 
         if bad_files or replace_names:
-            bad_files = self.load_badfiles(bad_files)
-            replace_names = self.load_replacement_names(replace_names)
+            replace_names = invert_replacement_names(replace_names)
             actions = []
             if bad_files:
                 actions.append("removing bad files")
@@ -1950,8 +1938,7 @@ class GitBuilder:
         replace_names = config.get("replace_names")
 
         if bad_files or replace_names:
-            bad_files = self.load_badfiles(bad_files)
-            replace_names = self.load_replacement_names(replace_names)
+            replace_names = invert_replacement_names(replace_names)
             actions = []
             if bad_files:
                 actions.append("removing bad files")
@@ -2108,7 +2095,6 @@ class GitBuilder:
         branch = self.branches[branch_name]
 
         output_filename = config["output_filename"]
-        output_filename = os.path.join(self.config_dir, output_filename)
         self.report("writing name list", end="")
 
         names = self.repo.get_branch_names(branch)
@@ -2147,16 +2133,17 @@ def main(name):
         if not filename.endswith(".json"):
             filename = f"{filename}.json"
 
-        config_dir, config = GitBuilder.load_config_file(filename)
+        steps = GitBuilder.load_config_file(filename)
 
-        repo_step = any(a.step == "load_repository" for a in config.values())
+        repo_step = any(a.step == "load_repository" for a in steps)
 
         if not repo_step:
-            git_repo = GitRepo(f"{filename}.git", report=report)
+            fn = filename.replace(".json", ".git")
+            git_repo = GitRepo(fn, report=report)
             git_repo.report("opened default repo:", git_repo.git.path, end="\n\n")
 
-        builder = GitBuilder(git_repo, config_dir=config_dir, report=report)
-        builder.run(config, refresh=refresh)
+        builder = GitBuilder(git_repo, report=report)
+        builder.run(steps, refresh=refresh)
     elif arg == "merge":
         path = None
         cwd = os.getcwd()
@@ -2174,24 +2161,24 @@ def main(name):
             raise Exception("Run inside the root directory of the repository, thanks.")
 
         git_repo = GitRepo(path, report=report)
-        builder = GitBuilder(git_repo, config_dir=path, report=report)
+        builder = GitBuilder(git_repo, report=report)
 
-        steps = {}
+        steps = []
 
         branches = sys.argv[2:]
         target = branches.pop()
 
         for name in branches:
-            steps[name] = BuildStep(name, "load_branch", {}, set())
+            steps.append(BuildStep(name, "load_branch", {}, set()))
 
         args = {"branches": {n: n for n in branches}}
-        steps[target] = BuildStep(target, "merge_branches", args, set(branches))
-        steps[f"{target}-output"] = BuildStep(
-            target,
+        steps.append( BuildStep(target, "merge_branches", args, set(branches)))
+        steps.append( BuildStep(
+            f"{target}-output"
             "write_branch",
             {"branch": target, "include_branches": False},
             set(branches),
-        )
+        ))
 
         builder.run(steps)
 
