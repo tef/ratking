@@ -1606,80 +1606,39 @@ class GitWriter:
 # ratking cli program
 
 @dataclass
-class Command:
+class Step:
     name: str
-    step: str
+    cmd: str
     config: dict
 
     def load_dependencies(self, result):
         config =  dict(self.config)
-        step = self.step
-        if step in ("show_branch", "write_branch", "write_branch_names", "reparent_branch"):
+        cmd = self.cmd.name
+        if cmd in ("show_branch", "write_branch", "write_branch_names", "reparent_branch"):
             config["branch"] = result[config["branch"]]
-        elif step == "append_branches":
+        elif cmd == "append_branches":
             config["branches"] = [result[x] for x in config["branches"]]
-        elif step == "merge_branches":
+        elif cmd == "merge_branches":
             config["branches"] = {k:result[x] for k,x in config["branches"].items()}
 
         return config
 
     def dependencies(self):
         deps = set()
-        step, config = self.step, self.config
-        if step in ("show_branch", "write_branch", "write_branch_names", "reparent_branch"):
+        cmd, config = self.cmd.name, self.config
+        if cmd in ("show_branch", "write_branch", "write_branch_names", "reparent_branch"):
             deps.add(config["branch"])
-        elif step == "append_branches":
+        elif cmd == "append_branches":
             deps.update(config["branches"])
-        elif step == "merge_branches":
+        elif cmd == "merge_branches":
             for branch_prefix, branch in config["branches"].items():
                 deps.add(branch)
         return deps
 
 
     @classmethod
-    def sort_steps(cls, step_list):
-        """Given a list of build_steps, this method returns
-        a new list in a stable topologically sorted order. If the
-        list is already in order, it will return the same value.
-        """
-
-        search = []
-        number = {}
-        after = defaultdict(set)
-        count = {}
-        steps = {}
-
-        for n, action in enumerate(step_list):
-            name = action.name
-            number[name] = n
-            deps = action.dependencies()
-            count[name] = len(deps)
-            if count[name] == 0:
-                search.append((n, name))
-            for d in deps:
-                after[d].add(name)
-            steps[name] = action
-
-        output = []
-
-        while search:
-            # of the work ready to go, i.e no dependencies left
-            # we pick the action that appeared earliest in the file
-            _, name = heappop(search)
-            output.append(steps[name])
-
-            for d in after[name]:
-                count[d] -= 1
-                if count[d] == 0:
-                    heappush(search, (number[d], d))
-
-        if set(steps) != set(s.name for s in output):
-            raise Bug("Steps missing after sorting")
-
-        return output
-
-    @classmethod
-    def make_action_config(cls, config_dir, config):
+    def make_step_config(cls, config_dir, config):
+        """ load json, update filenames """
         replace = {k[:-5]:v for k,v in config.items() if k.endswith(".json")}
 
         loaded = {}
@@ -1701,7 +1660,7 @@ class Command:
         return config
 
     @classmethod
-    def load_config_file(cls, filename):
+    def load_steps(cls, filename, commands):
         config_dir = os.path.dirname(filename)
 
         with open(filename, "r+") as fh:
@@ -1710,21 +1669,95 @@ class Command:
         steps = []
 
         if isinstance(raw_config, list):
-            for item in raw_config:
-                name = item.pop("name")
-                step = item.pop("step")
-                item = cls.make_action_config(config_dir, item)
-                steps.append( Command(name, step, item))
+            for step_config in raw_config:
+                name = step_config.pop("name")
+                cmd = commands[step_config.pop("cmd")]
+                step_config = cls.make_step_config(config_dir, step_config)
+                steps.append( Step(name, cmd, step_config))
 
         elif isinstance(raw_config, dict):
-            for name, item in raw_config.items():
-                step = item.pop("step")
-                item = cls.make_action_config(config_dir, item)
-                steps.append( Command(name, step, item))
+            for name, step_config in raw_config.step_config():
+                cmd = commands[step_config.pop("cmd")]
+                step_config = cls.make_step_config(config_dir, step_config)
+                steps.append( Step(name, cmd, step_config))
         else:
             raise Error("builder config is of unsupported type")
 
         return steps
+
+    @classmethod
+    def sort_steps(cls, step_list):
+        """Given a list of build_steps, this method returns
+        a new list in a stable topologically sorted order. If the
+        list is already in order, it will return the same value.
+        """
+
+        search = []
+        number = {}
+        after = defaultdict(set)
+        count = {}
+        steps = {}
+
+        for n, step in enumerate(step_list):
+            name = step.name
+            number[name] = n
+            deps = step.dependencies()
+            count[name] = len(deps)
+            if count[name] == 0:
+                search.append((n, name))
+            for d in deps:
+                after[d].add(name)
+            steps[name] = step
+
+        output = []
+
+        while search:
+            # of the work ready to go, i.e no dependencies left
+            # we pick the step that appeared earliest in the file
+            _, name = heappop(search)
+            output.append(steps[name])
+
+            for d in after[name]:
+                count[d] -= 1
+                if count[d] == 0:
+                    heappush(search, (number[d], d))
+
+        if set(steps) != set(s.name for s in output):
+            raise Bug("Steps missing after sorting")
+
+        return output
+
+    @classmethod
+    def run_steps(cls, repo,  steps, refresh=False, report=None):
+        fetched = set()
+        report = report if report else lambda *a, **k: None
+
+        sorted_steps = Step.sort_steps(steps)
+        names = ", ".join(s.name or s.cmd for s in sorted_steps)
+
+        if steps == sorted_steps:
+            report("running steps in given order:", (names))
+        else:
+            report("running steps in dependency order:", (names))
+        report()
+
+        result = {}
+        for step in sorted_steps:
+
+            callback = step.cmd
+            config = step.load_dependencies(result)
+            config["refresh"] = refresh
+            config["fetched"] = fetched
+            config["report"] = report
+
+            output = callback(repo, step.name, config)
+            report()
+            if step.cmd == "load_repository":
+                repo = output
+            elif step.name:
+                result[step.name] = output
+
+        return result
 
 
 class Callbacks:
@@ -1732,7 +1765,7 @@ class Callbacks:
         self.callbacks = {}
 
     def canon(self, name):
-        return name.replace(".", "-").replace("_", "-")
+        return name.replace(".", "_").replace("-", "_")
 
     def __contains__(self, name):
         return self.canon(name) in self.callbacks
@@ -1745,7 +1778,9 @@ class Callbacks:
 
     def add(self, name):
         def _add(fn):
-            self.callbacks[self.canon(name)] = fn
+            c = self.canon(name)
+            self.callbacks[c] = fn
+            fn.name = c
             return fn
 
         return _add
@@ -1753,46 +1788,9 @@ class Callbacks:
 class App:
     commands = Callbacks()
 
-    def __init__(self, repo=None, *, report=None):
-        self.repo = repo
-        self.fetched = set()
-        self.branches = {}
-        self.report = report if report else lambda *a, **k: None
-
     @classmethod
     def add_command(self, name):
         return self.commands.add(name)
-
-    def run(self, steps, refresh=False):
-        if refresh:
-            self.fetched = set()
-
-
-        sorted_steps = Command.sort_steps(steps)
-        names = ", ".join(s.name or s.step for s in sorted_steps)
-
-        if steps == sorted_steps:
-            self.report("running steps in given order:", (names))
-        else:
-            self.report("running steps in dependency order:", (names))
-        self.report()
-
-        result = {}
-        for action in sorted_steps:
-            name, step, config = action.name, action.step, action.config
-            if action.step not in self.commands:
-                raise Bug(f"Bad step for {action.name}: {action.step}")
-
-            callback = self.commands[step]
-            config = action.load_dependencies(result)
-            config["refresh"] = refresh
-
-            output = callback(self, action.name, config)
-            self.report()
-            if name:
-                result[name] = output
-
-        return result
 
     @classmethod
     def main(cls, name=__name__):
@@ -1819,17 +1817,17 @@ class App:
             if not filename.endswith(".json"):
                 filename = f"{filename}.json"
 
-            steps = Command.load_config_file(filename)
+            steps = Step.load_steps(filename, cls.commands)
 
-            repo_step = any(a.step == "load_repository" for a in steps)
+            repo_step = any(a.cmd == "load_repository" for a in steps)
 
             if not repo_step:
                 fn = filename.replace(".json", ".git")
                 git_repo = GitRepo(fn, report=report)
                 git_repo.report("opened default repo:", git_repo.git.path, end="\n\n")
 
-            builder = App(git_repo, report=report)
-            builder.run(steps, refresh=refresh)
+            Step.run_steps(git_repo, steps, refresh=refresh, report=report)
+
         elif arg == "merge":
             path = None
             cwd = os.getcwd()
@@ -1847,7 +1845,6 @@ class App:
                 raise Exception("Run inside the root directory of the repository, thanks.")
 
             git_repo = GitRepo(path, report=report)
-            builder = App(git_repo, report=report)
 
             steps = []
 
@@ -1855,18 +1852,18 @@ class App:
             target = branches.pop()
 
             for name in branches:
-                steps.append(Command(name, "load_branch", {}, set()))
+                steps.append(Step(name, "load_branch", {}, set()))
 
             args = {"branches": {n: n for n in branches}}
-            steps.append( Command(target, "merge_branches", args, set(branches)))
-            steps.append( Command(
-                f"{target}-output"
-                "write_branch",
+            steps.append( Step(target, cls.commands["merge_branches"], args, set(branches)))
+            steps.append( Step(
+                f"{target}-output",
+                cls.command["write_branch"],
                 {"branch": target, "include_branches": False},
                 set(branches),
             ))
+            Step.run_steps(git_repo, steps,  report=report)
 
-            builder.run(steps)
 
 
 prefix_message_callbacks = Callbacks()
@@ -1913,47 +1910,41 @@ def invert_replacement_names(replace_names):
     return replace
 
 @App.add_command("load_repository")
-def load_repository(app, name, config):
+def load_repository(repo, name, config):
     path = config.get("filename", name)
     bare = config.get("bare", True)
-    app.repo = GitRepo(path, bare=bare, report=app.report)
-    app.report("opened repo from config:", app.repo.path)
+    report = config["report"]
+    repo = GitRepo(path, bare=bare, report=report)
+    report("opened repo from config:", repo.path)
+    return repo
 
 @App.add_command("add_remote")
-def add_remote(app, name, config):
+def add_remote(repo, name, config):
     remote_name = config.get("remote_name", name)
     url = config["url"]
     refresh = config["refresh"]
 
-    app.report("adding remote:", f"{remote_name}")
-    created = app.repo.add_remote(remote_name, url)
-    # if created or refresh:
-    #    app.report(f"    fetching {remote_name} from {url}", end="")
-    #    if url not in app.fetched:
-    #        # app.repo.fetch_remote(remote_name)
-    #        app.fetched.add(url)
-    #    app.report()
-    # else:
-    #    app.report(f"    already fetched {remote_name} from {url}")
+    repo.report("adding remote:", f"{remote_name}")
+    created = repo.add_remote(remote_name, url)
 
 @App.add_command("load_branch")
-def fetch_branch(app, name, config):
+def fetch_branch(repo, name, config):
     branch_name = config.get("branch_name", name)
 
-    app.report("loading branch", f"{branch_name}")
+    repo.report("loading branch", f"{branch_name}")
 
     replace = config.get("replace_parents")
     include = config.get("include_branches", True)
     exclude = config.get("exclude_branches", False)
 
-    branch = app.repo.get_branch(
+    branch = repo.get_branch(
         branch_name,
         replace_parents=replace,
         include=include,
         exclude=exclude,
     )
 
-    app.report(
+    repo.report(
         "    >",
         name,
         "has",
@@ -1968,7 +1959,7 @@ def fetch_branch(app, name, config):
     for ref_name, ref_head in config.get("named_heads", {}).items():
         branch.named_heads[ref_name] = ref_head
 
-    app.report(len(branch.graph.commits), "total commits")
+    repo.report(len(branch.graph.commits), "total commits")
 
     bad_files = config.get("bad_files")
     replace_names = config.get("replace_names")
@@ -1980,37 +1971,37 @@ def fetch_branch(app, name, config):
             actions.append("removing bad files")
         if replace_names:
             actions.append("replacing names")
-        app.report("    rewriting branch:", ", ".join(actions))
-        branch = app.repo.rewrite_branch(
+        repo.report("    rewriting branch:", ", ".join(actions))
+        branch = repo.rewrite_branch(
             branch, bad_files=bad_files, replace_names=replace_names
         )
 
     return branch
 
 @App.add_command("fetch_remote_branch")
-def fetch_remote_branch(app, name, config):
+def fetch_remote_branch(repo, name, config):
     branch_name = config["default_branch"]
     url = config["remote"]
     refresh = config["refresh"]
     remote_name = f"{name}-origin"
 
-    app.report("loading branch", f"{name}/{branch_name}")
+    repo.report("loading branch", f"{name}/{branch_name}")
 
-    if app.repo.add_remote(remote_name, url) or refresh:
-        app.report(f"    fetching {name} from {url}", end="")
+    if repo.add_remote(remote_name, url) or refresh:
+        repo.report(f"    fetching {name} from {url}", end="")
 
-        if url not in app.fetched:
-            app.repo.fetch_remote(remote_name)
-            app.fetched.add(url)
-        app.report()
+        if url not in config["fetched"]:
+            repo.fetch_remote(remote_name)
+            config["fetched"].add(url)
+        repo.report()
     else:
-        app.report(f"    already fetched {name} from {url}")
+        repo.report(f"    already fetched {name} from {url}")
 
     replace = config.get("replace_parents")
     include = config.get("include_branches", True)
     exclude = config.get("exclude_branches", False)
 
-    branch = app.repo.get_remote_branch(
+    branch = repo.get_remote_branch(
         remote_name,
         branch_name,
         replace_parents=replace,
@@ -2018,7 +2009,7 @@ def fetch_remote_branch(app, name, config):
         exclude=exclude,
     )
 
-    app.report(
+    repo.report(
         "    >",
         name,
         "has",
@@ -2033,7 +2024,7 @@ def fetch_remote_branch(app, name, config):
     for ref_name, ref_head in config.get("named_heads", {}).items():
         branch.named_heads[ref_name] = ref_head
 
-    app.report(len(branch.graph.commits), "total commits")
+    repo.report(len(branch.graph.commits), "total commits")
 
     bad_files = config.get("bad_files")
     replace_names = config.get("replace_names")
@@ -2045,42 +2036,42 @@ def fetch_remote_branch(app, name, config):
             actions.append("removing bad files")
         if replace_names:
             actions.append("replacing names")
-        app.report("    rewriting branch:", ", ".join(actions))
-        branch = app.repo.rewrite_branch(
+        repo.report("    rewriting branch:", ", ".join(actions))
+        branch = repo.rewrite_branch(
             branch, bad_files=bad_files, replace_names=replace_names
         )
 
     if config.get("reparent_branch"):
-        branch = app.repo.reparent_branch(branch)
+        branch = repo.reparent_branch(branch)
 
     count = sum(len(x) > 1 for x in branch.graph.parents.values())
-    app.report("   ", "total commits", len(branch.graph.commits), "total merge commits", count)
+    repo.report("   ", "total commits", len(branch.graph.commits), "total merge commits", count)
 
     return branch
 
 @App.add_command("reparent_branch")
-def reparent_branch(app, name, config):
+def reparent_branch(repo, name, config):
     branch= config["branch"]
-    app.report("reparenting branch", branch.name)
+    repo.report("reparenting branch", branch.name)
 
-    branch = app.repo.reparent_branch(
+    branch = repo.reparent_branch(
         branch,
     )
     return branch
 
 
 @App.add_command("start_branch")
-def start_branch(app, name, config):
+def start_branch(repo, name, config):
     first_commit = config["first_commit"]
 
     timestamp = first_commit.pop("timestamp")
     if isinstance(timestamp, str):
         timestamp = datetime.fromisoformat(timestamp).astimezone(timezone.utc)
 
-    app.report("starting empty branch:", name)
-    init = app.repo.start_branch(name, timestamp=timestamp, **first_commit)
+    repo.report("starting empty branch:", name)
+    init = repo.start_branch(name, timestamp=timestamp, **first_commit)
 
-    writer = app.repo.Writer(name)
+    writer = repo.Writer(name)
     writer.graft(init)
 
     c = init.graph.commits[init.head]
@@ -2091,7 +2082,7 @@ def start_branch(app, name, config):
     return branch
 
 @App.add_command("merge_branches")
-def merge_branches(app, name, config):
+def merge_branches(repo, name, config):
     branches = config["branches"]
     prefix_message = config.get("prefix_message")
     merge_named_heads = config.get("merge_named_heads")
@@ -2104,8 +2095,8 @@ def merge_branches(app, name, config):
     if prefix_message:
         fix_message = prefix_message_callbacks.get(prefix_message, None)
 
-    app.report("creating merged branch:", name, "from", len(branches), "branches")
-    branch = app.repo.interweave_branches(
+    repo.report("creating merged branch:", name, "from", len(branches), "branches")
+    branch = repo.interweave_branches(
         name,
         branches,
         merge_named_heads=merge_named_heads,
@@ -2114,19 +2105,19 @@ def merge_branches(app, name, config):
     return branch
 
 @App.add_command("append_branches")
-def append_branches(app, name, config):
+def append_branches(repo, name, config):
     branches = config["branches"]
-    writer = app.repo.Writer(name)
-    app.report("creating new branch:", name, "from ", len(branches), "branches")
+    writer = repo.Writer(name)
+    repo.report("creating new branch:", name, "from ", len(branches), "branches")
     for branch in branches:
-        app.report("   ", "appending", branch.name)
+        repo.report("   ", "appending", branch.name)
         writer.graft(branch)
 
     branch = writer.to_branch()
     return branch
 
 @App.add_command("show_branch")
-def show_branch(app, name, config):
+def show_branch(repo, name, config):
     branch = config["branch"]
     named_heads = config["named_heads"]
     graph = branch.graph
@@ -2144,23 +2135,23 @@ def show_branch(app, name, config):
         text = f"{name} (was {old})" if old else name
         report.append((date, new, text))
 
-    app.report(f"branch: {branch.name} (includes {len(branch.named_heads)} heads)")
-    app.report()
+    repo.report(f"branch: {branch.name} (includes {len(branch.named_heads)} heads)")
+    repo.report()
     for date, nidx, text in sorted(report):
-        app.report("   ", nidx, text)
-    app.report()
-    app.report("   ", "new head:", branch.head)
-    app.report()
+        repo.report("   ", nidx, text)
+    repo.report()
+    repo.report("   ", "new head:", branch.head)
+    repo.report()
     count = sum(len(x) > 1 for x in graph.parents.values())
-    app.report("   ", "total commits", len(graph.commits), "total merge commits", count)
+    repo.report("   ", "total commits", len(graph.commits), "total merge commits", count)
 
 @App.add_command("write_branch")
-def write_branch(app, name, config):
+def write_branch(repo, name, config):
     branch = config["branch"]
     prefix = config["prefix"] + "/" if "prefix" in config else ""
 
-    app.report(f"writing branch '{branch.name}' to '{prefix}{branch.name}'")
-    app.repo.write_branch_head(f"{prefix}{branch.name}", branch.head)
+    repo.report(f"writing branch '{branch.name}' to '{prefix}{branch.name}'")
+    repo.write_branch_head(f"{prefix}{branch.name}", branch.head)
 
     named_heads = config.get("named_heads", None)
     include = config.get("include_branches", True)
@@ -2181,29 +2172,29 @@ def write_branch(app, name, config):
             named_heads[name] = head
 
     for name, head in named_heads.items():
-        app.repo.write_branch_head(f"{prefix}/{name}", head)
+        repo.write_branch_head(f"{prefix}/{name}", head)
         count += 1
 
     if count or skipped:
-        app.report("   ", f"plus {count} branches, skipping {skipped}")
+        repo.report("   ", f"plus {count} branches, skipping {skipped}")
 
 @App.add_command("write_branch_names")
-def write_branch_names(app, name, config):
+def write_branch_names(repo, name, config):
     branch = config["branch"]
 
     output_filename = config["output_filename"]
-    app.report("writing name list", end="")
+    repo.report("writing name list", end="")
 
-    names = app.repo.get_branch_names(branch)
+    names = repo.get_branch_names(branch)
     name_list = names.keys()
 
-    app.report(",", len(name_list), "unique names", end="")
+    repo.report(",", len(name_list), "unique names", end="")
 
     with open(output_filename, "w") as fh:
         for name in sorted(name_list):
             fh.write(f"{name}\n")
 
-    app.report()
+    repo.report()
 
 
 App.main()
