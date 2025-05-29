@@ -14,8 +14,6 @@ from datetime import datetime, timedelta, timezone
 from glob import translate as glob_to_regex
 from heapq import heappush, heappop
 
-sys.setrecursionlimit(20000)
-
 try:
     import pygit2
 except ImportError:
@@ -27,7 +25,11 @@ else:
     if sys.version_info.major < 3 or sys.version_info.minor < 13:
         raise Exception("python 3.13 is required")
 
+
+## constants
+
 INCLUDE_ORPHANS = True # include branches with orphan init commits
+TIME_TRAVEL = False
 
 GIT_DIR_MODE = 0o040_000
 GIT_FILE_MODE = 0o100_644
@@ -37,6 +39,8 @@ GIT_LINK_MODE = 0o120_000
 GIT_GITLINK_MODE = 0o160_000  # actually a submodule, blegh
 GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # Wow, isn't git amazing.
 
+
+## errors
 
 class Bug(Exception):
     pass
@@ -53,30 +57,7 @@ class TimeTravel(Exception):
 class MergeError(Exception):
     pass
 
-
-class Callbacks:
-    def __init__(self):
-        self.callbacks = {}
-
-    def canon(self, name):
-        return name.replace(".", "-").replace("_", "-")
-
-    def __contains__(self, name):
-        return self.canon(name) in self.callbacks
-
-    def get(self, name, default=None):
-        return self.callbacks.get(self.canon(name), default)
-
-    def __getitem__(self, name):
-        return self.callbacks[self.canon(name)]
-
-    def add(self, name):
-        def _add(fn):
-            self.callbacks[self.canon(name)] = fn
-            return fn
-
-        return _add
-
+# helpers
 
 @functools.cache
 def compile_pattern(pattern):
@@ -97,39 +78,7 @@ def sibling(base_file, filename):
     return os.path.join(os.path.dirname(base_file), filename)
 
 
-prefix_message_callbacks = Callbacks()
-
-
-cc_prefixes = (
-    "build:",
-    "chore:",
-    "ci:",
-    "docs:",
-    "feat:",
-    "fix:",
-    "perf:",
-    "refactor:",
-    "revert:",
-    "style:",
-    "test:",
-)
-
-cc_prefixes2 = tuple(c.replace(":", "\x28") for c in cc_prefixes)
-
-
-@prefix_message_callbacks.add("conventional-commit")
-def prefix_with_conventional_commit(c, prefix):
-    message = c.message
-    if len(c.parents) > 1:  # skip merges
-        pass
-    elif message.startswith(cc_prefixes2):  # feat(...):
-        pass
-    elif message.startswith(cc_prefixes):
-        kind, tail = message.split(":", 1)
-        message = f"{kind}({prefix}): {message}"
-    else:
-        message = f"feat({prefix}): {message}"
-    return message
+# ratking library: Signature, Graph, Branch, and Repo objects
 
 
 @dataclass
@@ -496,7 +445,7 @@ class GitGraph:
         if walked != set(self.commits):
             raise Bug("Graph has unreachable commits from heads")
 
-        # walk forward from talks
+        # walk forward from tails
         # validate complete walk through children
 
         walked = set()
@@ -641,7 +590,6 @@ class GitBranch:
     def first_parents(self):
         return self.graph.first_parents(self.head)
 
-
     @classmethod
     def merge_linear_history(self,  branches, report):
         graphs = {}
@@ -659,14 +607,14 @@ class GitBranch:
         merged_graph = GitGraph.union(graphs)
 
         history = [list(h) for h in branch_history.values()]
-        new_history1 = []
+        new_history = []
 
         while history:
             next_head = [h[-1] for h in history]
             next_head.sort(key=lambda i: merged_graph.commits[i].max_date)
 
             c = next_head[-1]
-            new_history1.append(c)
+            new_history.append(c)
 
             for h in history:
                 if h[-1] == c:
@@ -675,68 +623,68 @@ class GitBranch:
             if any(not h for h in history):
                 history = [h for h in history if h]
 
-        new_history1.reverse()
+        new_history.reverse()
 
-        # validate new history
+        if not TIME_TRAVEL:
+            seen = set()
+            new_history1 = []
 
-        seen = set()
-        new_history2 = []
+            for h in branch_history.values():
+                new_history1.extend(x for x in h if x not in seen)
+                seen.update(h)
 
-        for h in branch_history.values():
-            new_history2.extend(x for x in h if x not in seen)
-            seen.update(h)
+            # n.b. python sort is stable
+            new_history1.sort(key=lambda idx: merged_graph.commits[idx].max_date)
 
-        new_history2.sort(key=lambda idx: merged_graph.commits[idx].max_date)
+            if new_history != new_history1:
+                raise TimeTravel("bad")
 
-        if new_history1 != new_history2:
-            raise TimeTravel("Merged branch somehow out of date order")
-        new_history = new_history1
 
         # scrap bad commits
-        # recalculate history and linear history
-
         skipped = set()
         skipped_orig = {}
 
         for name, branch in branches.items():
             graph = branch.graph
             history = branch_history[name]
+            history_set = set(history)
             linear_parent = branch_linear_parent[name]
-
             linear_children = graph.max_linear_children(history)
 
-            ## we only need to filter ones on our linear history
-            ## conflicts in non first parent commits are handled
-            ## in the branches that introduced them into the history
-
             conflicts = []
-
-            b_history = set(history)
+            
+            # any commit in the merged history that exists in the branch graph
+            # but not on the branch's linear history is a conflict
 
             for h in new_history:
-                if h in graph.commits and h not in b_history:
+                if h in graph.commits and h not in history_set:
                     lc = linear_children[h]
                     lp = linear_parent[h]
                     conflicts.append((h, lp, lc))
                     # h has newest ancestor lp, and earliest descendent lc on the history
                     # so any x on the history lp < x < lc is in conflict
 
-            print("   ", name, "has", len(conflicts), "conflicts with other branches")
 
+            count = 0
             for h, lp, lc in conflicts:
                 for x in range(lp+1, lc):
                     c = branch_history[name][x-1]
-                    skipped.add(c)
-                    skipped_orig[c] = branch.original.get(c, c)
+                    if c not in skipped:
+                        count+=1
+                        skipped.add(c)
+                        skipped_orig[c] = branch.original.get(c, c)
+
+            if count > 0:
+                report("   ", name, "has", count, "commits with conflict with", len(conflicts), "commits shared with other branches")
+
+        for name, branch in branches.items():
+            if branch.head in skipped:
+                raise MergeError(f"branch head {name} in conflict")
 
         new_history = [h for h in new_history if h not in skipped]
 
         if skipped:
             report("   ", "skipped", ", ".join(s for s in skipped_orig.values()))
-
-        for name, branch in branches.items():
-            if branch.head in skipped:
-                raise MergeError(f"branch head {name} in conflict")
 
         head = new_history[-1]
         tail = new_history[0]
@@ -1654,16 +1602,11 @@ class GitWriter:
             self.repo.get_commit(v)
         return self.head
 
-def invert_replacement_names(replace_names):
-    replace = {}
-    for name, r in replace_names.items():
-        for x in r:
-            replace[x] = name
 
-    return replace
+# ratking cli program
 
 @dataclass
-class BuildStep:
+class Command:
     name: str
     step: str
     config: dict
@@ -1772,6 +1715,29 @@ class BuildStep:
         return steps
 
 
+class Callbacks:
+    def __init__(self):
+        self.callbacks = {}
+
+    def canon(self, name):
+        return name.replace(".", "-").replace("_", "-")
+
+    def __contains__(self, name):
+        return self.canon(name) in self.callbacks
+
+    def get(self, name, default=None):
+        return self.callbacks.get(self.canon(name), default)
+
+    def __getitem__(self, name):
+        return self.callbacks[self.canon(name)]
+
+    def add(self, name):
+        def _add(fn):
+            self.callbacks[self.canon(name)] = fn
+            return fn
+
+        return _add
+
 class App:
     commands = Callbacks()
 
@@ -1789,12 +1755,10 @@ class App:
         if refresh:
             self.fetched = set()
 
-        sorted_steps = BuildStep.sort_steps(steps)
+        sorted_steps = Command.sort_steps(steps)
+        names = ", ".join(s.name or s.step for s in sorted_steps)
 
-        old_names = ", ".join(s.name for s in steps)
-        names = ", ".join(s.name for s in sorted_steps)
-
-        if old_names == names:
+        if steps == sorted_steps:
             self.report("running steps in given order:", (names))
         else:
             self.report("running steps in dependency order:", (names))
@@ -1836,7 +1800,7 @@ class App:
             if not filename.endswith(".json"):
                 filename = f"{filename}.json"
 
-            steps = BuildStep.load_config_file(filename)
+            steps = Command.load_config_file(filename)
 
             repo_step = any(a.step == "load_repository" for a in steps)
 
@@ -1872,11 +1836,11 @@ class App:
             target = branches.pop()
 
             for name in branches:
-                steps.append(BuildStep(name, "load_branch", {}, set()))
+                steps.append(Command(name, "load_branch", {}, set()))
 
             args = {"branches": {n: n for n in branches}}
-            steps.append( BuildStep(target, "merge_branches", args, set(branches)))
-            steps.append( BuildStep(
+            steps.append( Command(target, "merge_branches", args, set(branches)))
+            steps.append( Command(
                 f"{target}-output"
                 "write_branch",
                 {"branch": target, "include_branches": False},
@@ -1884,6 +1848,50 @@ class App:
             ))
 
             builder.run(steps)
+
+
+prefix_message_callbacks = Callbacks()
+
+
+cc_prefixes = (
+    "build:",
+    "chore:",
+    "ci:",
+    "docs:",
+    "feat:",
+    "fix:",
+    "perf:",
+    "refactor:",
+    "revert:",
+    "style:",
+    "test:",
+)
+
+cc_prefixes2 = tuple(c.replace(":", "\x28") for c in cc_prefixes)
+
+
+@prefix_message_callbacks.add("conventional-commit")
+def prefix_with_conventional_commit(c, prefix):
+    message = c.message
+    if len(c.parents) > 1:  # skip merges
+        pass
+    elif message.startswith(cc_prefixes2):  # feat(...):
+        pass
+    elif message.startswith(cc_prefixes):
+        kind, tail = message.split(":", 1)
+        message = f"{kind}({prefix}): {message}"
+    else:
+        message = f"feat({prefix}): {message}"
+    return message
+
+
+def invert_replacement_names(replace_names):
+    replace = {}
+    for name, r in replace_names.items():
+        for x in r:
+            replace[x] = name
+
+    return replace
 
 @App.add_command("load_repository")
 def load_repository(app, name, config):
