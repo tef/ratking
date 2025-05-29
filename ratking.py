@@ -1670,7 +1670,7 @@ class Step:
 
         if isinstance(raw_config, list):
             for step_config in raw_config:
-                name = step_config.pop("name")
+                name = step_config.pop("name", None)
                 cmd = commands[step_config.pop("cmd")]
                 step_config = cls.make_step_config(config_dir, step_config)
                 steps.append( Step(name, cmd, step_config))
@@ -1686,43 +1686,41 @@ class Step:
         return steps
 
     @classmethod
-    def sort_steps(cls, step_list):
+    def sort_steps(cls, steps):
         """Given a list of build_steps, this method returns
         a new list in a stable topologically sorted order. If the
         list is already in order, it will return the same value.
         """
 
         search = []
-        number = {}
+        numbers = {}
         after = defaultdict(set)
         count = {}
-        steps = {}
 
-        for n, step in enumerate(step_list):
-            name = step.name
-            number[name] = n
+        numbers = {s.name:n for n,s in enumerate(steps) if s.name}
+
+        for n, step in enumerate(steps):
             deps = step.dependencies()
-            count[name] = len(deps)
-            if count[name] == 0:
-                search.append((n, name))
-            for d in deps:
-                after[d].add(name)
-            steps[name] = step
+            count[n] = len(deps)
+            if count[n] == 0:
+                search.append(n)
+            for name in deps:
+                after[numbers[name]].add(n)
 
         output = []
 
         while search:
             # of the work ready to go, i.e no dependencies left
             # we pick the step that appeared earliest in the file
-            _, name = heappop(search)
-            output.append(steps[name])
+            idx = heappop(search)
+            output.append(steps[idx])
 
-            for d in after[name]:
+            for d in after[idx]:
                 count[d] -= 1
                 if count[d] == 0:
-                    heappush(search, (number[d], d))
+                    heappush(search, d)
 
-        if set(steps) != set(s.name for s in output):
+        if len(steps) != len(output):
             raise Bug("Steps missing after sorting")
 
         return output
@@ -1733,7 +1731,7 @@ class Step:
         report = report if report else lambda *a, **k: None
 
         sorted_steps = Step.sort_steps(steps)
-        names = ", ".join(s.name or s.cmd for s in sorted_steps)
+        names = ", ".join(s.name or s.cmd.name for s in sorted_steps)
 
         if steps == sorted_steps:
             report("running steps in given order:", (names))
@@ -1757,7 +1755,7 @@ class Step:
             elif step.name:
                 result[step.name] = output
 
-        return result
+        return repo, result
 
 
 class Callbacks:
@@ -1827,8 +1825,7 @@ class App:
                 git_repo.report("opened default repo:", git_repo.git.path, end="\n\n")
 
             Step.run_steps(git_repo, steps, refresh=refresh, report=report)
-
-        elif arg == "merge":
+        elif arg == "merge_branches":
             path = None
             cwd = os.getcwd()
             while cwd:
@@ -1848,7 +1845,7 @@ class App:
 
             steps = []
 
-            branches = sys.argv[2:]
+            raw_config = sys.argv[2:]
             target = branches.pop()
 
             for name in branches:
