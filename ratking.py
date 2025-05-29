@@ -1610,7 +1610,30 @@ class Command:
     name: str
     step: str
     config: dict
-    dependencies: set
+
+    def load_dependencies(self, result):
+        config =  dict(self.config)
+        step = self.step
+        if step in ("show_branch", "write_branch", "write_branch_names", "reparent_branch"):
+            config["branch"] = result[config["branch"]]
+        elif step == "append_branches":
+            config["branches"] = [result[x] for x in config["branches"]]
+        elif step == "merge_branches":
+            config["branches"] = {k:result[x] for k,x in config["branches"].items()}
+
+        return config
+
+    def dependencies(self):
+        deps = set()
+        step, config = self.step, self.config
+        if step in ("show_branch", "write_branch", "write_branch_names", "reparent_branch"):
+            deps.add(config["branch"])
+        elif step == "append_branches":
+            deps.update(config["branches"])
+        elif step == "merge_branches":
+            for branch_prefix, branch in config["branches"].items():
+                deps.add(branch)
+        return deps
 
 
     @classmethod
@@ -1622,18 +1645,19 @@ class Command:
 
         search = []
         number = {}
-        pred = defaultdict(set)
+        after = defaultdict(set)
         count = {}
         steps = {}
 
         for n, action in enumerate(step_list):
             name = action.name
             number[name] = n
-            count[name] = len(action.dependencies)
+            deps = action.dependencies()
+            count[name] = len(deps)
             if count[name] == 0:
                 search.append((n, name))
-            for d in action.dependencies:
-                pred[d].add(name)
+            for d in deps:
+                after[d].add(name)
             steps[name] = action
 
         output = []
@@ -1644,7 +1668,7 @@ class Command:
             _, name = heappop(search)
             output.append(steps[name])
 
-            for d in pred[name]:
+            for d in after[name]:
                 count[d] -= 1
                 if count[d] == 0:
                     heappush(search, (number[d], d))
@@ -1653,18 +1677,6 @@ class Command:
             raise Bug("Steps missing after sorting")
 
         return output
-
-    @classmethod
-    def make_action(cls, name, step, config):
-        deps = set()
-        if step in ("show_branch", "write_branch", "write_branch_names", "reparent_branch"):
-            deps.add(config["branch"])
-        elif step == "append_branches":
-            deps.update(config["branches"])
-        elif step == "merge_branches":
-            for branch_name, branch in config["branches"].items():
-                deps.add(branch_name)
-        return cls(name, step, config, deps)
 
     @classmethod
     def make_action_config(cls, config_dir, config):
@@ -1702,13 +1714,13 @@ class Command:
                 name = item.pop("name")
                 step = item.pop("step")
                 item = cls.make_action_config(config_dir, item)
-                steps.append( cls.make_action(name, step, item))
+                steps.append( Command(name, step, item))
 
         elif isinstance(raw_config, dict):
             for name, item in raw_config.items():
                 step = item.pop("step")
                 item = cls.make_action_config(config_dir, item)
-                steps.append( cls.make_action(name, step, item))
+                steps.append( Command(name, step, item))
         else:
             raise Error("builder config is of unsupported type")
 
@@ -1755,6 +1767,7 @@ class App:
         if refresh:
             self.fetched = set()
 
+
         sorted_steps = Command.sort_steps(steps)
         names = ", ".join(s.name or s.step for s in sorted_steps)
 
@@ -1764,16 +1777,22 @@ class App:
             self.report("running steps in dependency order:", (names))
         self.report()
 
+        result = {}
         for action in sorted_steps:
             name, step, config = action.name, action.step, action.config
-            if step not in self.commands:
-                raise Bug(f"Bad step for {name}: {step}")
-            callback = self.commands[step]
-            config["refresh"] = refresh
-            callback(self, name, config)
-            self.report()
+            if action.step not in self.commands:
+                raise Bug(f"Bad step for {action.name}: {action.step}")
 
-        return self.branches
+            callback = self.commands[step]
+            config = action.load_dependencies(result)
+            config["refresh"] = refresh
+
+            output = callback(self, action.name, config)
+            self.report()
+            if name:
+                result[name] = output
+
+        return result
 
     @classmethod
     def main(cls, name=__name__):
@@ -1966,7 +1985,7 @@ def fetch_branch(app, name, config):
             branch, bad_files=bad_files, replace_names=replace_names
         )
 
-    app.branches[name] = branch
+    return branch
 
 @App.add_command("fetch_remote_branch")
 def fetch_remote_branch(app, name, config):
@@ -2037,18 +2056,17 @@ def fetch_remote_branch(app, name, config):
     count = sum(len(x) > 1 for x in branch.graph.parents.values())
     app.report("   ", "total commits", len(branch.graph.commits), "total merge commits", count)
 
-    app.branches[name] = branch
+    return branch
 
 @App.add_command("reparent_branch")
 def reparent_branch(app, name, config):
-    branch_name = config["branch"]
-    branch = app.branches[branch_name]
-    app.report("reparenting branch", branch_name)
+    branch= config["branch"]
+    app.report("reparenting branch", branch.name)
 
     branch = app.repo.reparent_branch(
         branch,
     )
-    app.branches[name] = branch
+    return branch
 
 
 @App.add_command("start_branch")
@@ -2070,14 +2088,13 @@ def start_branch(app, name, config):
     branch = writer.to_branch()
     # branch.named_heads["head"] = branch.head
     branch.named_heads["init"] = branch.tail
-    app.branches[name] = branch
+    return branch
 
 @App.add_command("merge_branches")
 def merge_branches(app, name, config):
     branches = config["branches"]
     prefix_message = config.get("prefix_message")
     merge_named_heads = config.get("merge_named_heads")
-    branches = {k: app.branches[v] for k, v in branches.items()}
     strategy = config.get("merge_strategy", "first-parent")
 
     if strategy != "first-parent":
@@ -2094,23 +2111,23 @@ def merge_branches(app, name, config):
         merge_named_heads=merge_named_heads,
         fix_message=fix_message,
     )
-    app.branches[name] = branch
+    return branch
 
 @App.add_command("append_branches")
 def append_branches(app, name, config):
     branches = config["branches"]
     writer = app.repo.Writer(name)
     app.report("creating new branch:", name, "from ", len(branches), "branches")
-    for branch_name in branches:
-        app.report("   ", "appending", branch_name)
-        writer.graft(app.branches[branch_name])
+    for branch in branches:
+        app.report("   ", "appending", branch.name)
+        writer.graft(branch)
 
     branch = writer.to_branch()
-    app.branches[name] = branch
+    return branch
 
 @App.add_command("show_branch")
 def show_branch(app, name, config):
-    branch = app.branches[config["branch"]]
+    branch = config["branch"]
     named_heads = config["named_heads"]
     graph = branch.graph
 
@@ -2139,12 +2156,11 @@ def show_branch(app, name, config):
 
 @App.add_command("write_branch")
 def write_branch(app, name, config):
-    branch_name = config["branch"]
-    branch = app.branches[branch_name]
+    branch = config["branch"]
     prefix = config["prefix"] + "/" if "prefix" in config else ""
 
-    app.report(f"writing branch '{branch_name}' to '{prefix}{branch_name}'")
-    app.repo.write_branch_head(f"{prefix}{branch_name}", branch.head)
+    app.report(f"writing branch '{branch.name}' to '{prefix}{branch.name}'")
+    app.repo.write_branch_head(f"{prefix}{branch.name}", branch.head)
 
     named_heads = config.get("named_heads", None)
     include = config.get("include_branches", True)
@@ -2159,7 +2175,7 @@ def write_branch(app, name, config):
             if not glob_match(include, name) or glob_match(exclude, name):
                 skipped += 1
                 continue
-            if name == branch_name:
+            if name == branch.name:
                 continue
 
             named_heads[name] = head
@@ -2173,8 +2189,7 @@ def write_branch(app, name, config):
 
 @App.add_command("write_branch_names")
 def write_branch_names(app, name, config):
-    branch_name = config["branch"]
-    branch = app.branches[branch_name]
+    branch = config["branch"]
 
     output_filename = config["output_filename"]
     app.report("writing name list", end="")
